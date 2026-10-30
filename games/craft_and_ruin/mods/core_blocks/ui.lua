@@ -10,7 +10,10 @@ hotbar.set_slot_size(0.14)
 
 -- Auto-center dynamically based on slot count and size:
 -- Total width roughly = slots * (slot_size / aspect)
-hotbar.set_position(-0.32, -0.88)
+hotbar.set_position(-0.35, -0.85)
+
+hotbar.set_texture("mcl_inventory_hotbar.png")
+hotbar.set_selected_texture("mcl_inventory_hotbar_selected.png")
 
 -- Populate slots
 hotbar.set_slot(1, "grass")

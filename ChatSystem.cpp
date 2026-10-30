@@ -1,25 +1,32 @@
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include "ChatSystem.h"
 #include "FontRenderer.h"
-#include <GLFW/glfw3.h>
-#include <glad/glad.h>
-#include <sol/sol.hpp>
 #include <iostream>
+#include <sstream>
 
 void ChatSystem::toggleChat(GLFWwindow* window) {
     isOpen = !isOpen;
     if (isOpen) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        currentInput = "";
     } else {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        currentInput.clear();
+    }
+}
+
+void ChatSystem::addMessage(const std::string& message) {
+    messageHistory.push_back(message);
+    if (messageHistory.size() > maxHistorySize) {
+        messageHistory.pop_front();
     }
 }
 
 void ChatSystem::handleCharInput(unsigned int codepoint) {
-    if (isOpen) {
-        if (codepoint >= 32 && codepoint <= 126) {
-            currentInput += static_cast<char>(codepoint);
-        }
+    if (!isOpen) return;
+    if (codepoint >= 32 && codepoint < 127) {
+        currentInput += static_cast<char>(codepoint);
     }
 }
 
@@ -29,54 +36,54 @@ void ChatSystem::handleKeyInput(int key, int scancode, int action, int mods, GLF
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_BACKSPACE && !currentInput.empty()) {
             currentInput.pop_back();
-        }
+        } 
         else if (key == GLFW_KEY_ENTER) {
             if (!currentInput.empty()) {
-                history.push_back({"> " + currentInput, static_cast<float>(glfwGetTime())});
-                commandHistory.push_back(currentInput);
-
-                if (currentInput[0] == '/') {
-                    history.push_back({"[System] Executed command.", static_cast<float>(glfwGetTime())});
-                } else {
-                    history.push_back({"[Player] " + currentInput, static_cast<float>(glfwGetTime())});
-                }
+                addMessage("> " + currentInput);
+                executeCommand(currentInput);
                 currentInput.clear();
             }
-            isOpen = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            toggleChat(window);
         }
         else if (key == GLFW_KEY_ESCAPE) {
-            isOpen = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            currentInput.clear();
+            toggleChat(window);
         }
     }
 }
 
-void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, int windowWidth, int windowHeight) {
-    if (!isOpen && history.empty()) return;
+void ChatSystem::executeCommand(const std::string& cmd) {
+    if (!cmd.empty() && cmd[0] == '/') {
+        addMessage("[System] Command executed: " + cmd);
+    } else {
+        addMessage(cmd);
+    }
+}
 
-    // Use a basic 2D orthographic projection shader or direct OpenGL quad rendering
-    // for the chat background box at the bottom-left of the screen.
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight) {
+    if (!fontRenderer || fontShader == 0) return;
 
-    // If chat is open, draw input box and history. 
-    // You can render text lines here using your FontRenderer or UI shader.
-    // For example, displaying the active input:
+    float aspect = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
+
+    // If chat is open, render current input prompt at the bottom
     if (isOpen) {
-        std::string displayText = "> " + currentInput + "_";
-        // fontRenderer->renderText(displayText, 20.0f, windowHeight - 40.0f, 1.0f, glm::vec3(1.0f));
+        std::string displayLine = "> " + currentInput + "_";
+        fontRenderer->renderText(fontShader, displayLine, -0.95f, -0.85f, 0.05f, 0.05f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), aspect);
     }
 
-    // Render last few history lines upwards from the bottom
-    float startY = windowHeight - 70.0f;
-    int count = 0;
-    for (auto it = history.rbegin(); it != history.rend() && count < 8; ++it, ++count) {
-        // fontRenderer->renderText(it->text, 20.0f, startY, 1.0f, glm::vec3(1.0f));
-        startY -= 20.0f;
+    // Render message history
+    int startIdx = 0;
+    if (messageHistory.size() > 8) {
+        startIdx = static_cast<int>(messageHistory.size()) - 8;
     }
 
-    glEnable(GL_DEPTH_TEST);
+    float startY = isOpen ? -0.75f : -0.85f;
+    float lineSpacing = 0.06f;
+
+    int lineCount = 0;
+    for (size_t i = startIdx; i < messageHistory.size(); ++i) {
+        float yPos = startY - (lineCount * lineSpacing);
+        float alpha = isOpen ? 1.0f : 0.75f;
+        fontRenderer->renderText(fontShader, messageHistory[i], -0.95f, yPos, 0.045f, 0.045f, glm::vec4(1.0f, 1.0f, 1.0f, alpha), aspect);
+        lineCount++;
+    }
 }

@@ -105,10 +105,10 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
     }
 
     // --- 4. AXIS-SEPARATED AABB COLLISION RESOLUTION ---
-    float playerWidth = 0.54f; // Slightly narrower than 0.6f to prevent 1x1 shaft wedging
+    float playerWidth = 0.52f; // Slim profile to easily navigate caves and 1x1 shafts
     float playerHeight = 1.8f;
     float halfWidth = playerWidth / 2.0f;
-    float skin = 0.04f;        // Skin width offset to prevent edge snagging
+    float skin = 0.02f;
 
     // --- X Axis Collision & Move ---
     position.x += velocity.x * deltaTime;
@@ -183,7 +183,6 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
         int minZ = static_cast<int>(std::floor(position.z - halfWidth + skin));
         int maxZ = static_cast<int>(std::floor(position.z + halfWidth - skin));
 
-        bool hitSolid = false;
         for (int x = minX; x <= maxX; ++x) {
             for (int y = minY; y <= maxY; ++y) {
                 for (int z = minZ; z <= maxZ; ++z) {
@@ -196,7 +195,6 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
                             position.y = static_cast<float>(y) + 1.0f;
                             velocity.y = 0.0f;
                             isGrounded = true;
-                            hitSolid = true;
                         } else if (velocity.y > 0.0f) {
                             position.y = static_cast<float>(y) - playerHeight;
                             velocity.y = 0.0f;
@@ -205,19 +203,9 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
                 }
             }
         }
-
-        // --- SAFETY FALLBACK FOR PENDING CHUNK LOADS ---
-        if (!hitSolid && velocity.y < 0.0f) {
-            int feetY = static_cast<int>(std::floor(position.y));
-            if (feetY <= 61) {
-                position.y = 61.0f;
-                velocity.y = 0.0f;
-                isGrounded = true;
-            }
-        }
     }
 
-    // --- ULTIMATE SAFETY NET ---
+    // --- VOID SAFETY NET ---
     if (position.y < -10.0f) {
         position = glm::vec3(8.0f, 75.0f, 8.0f);
         velocity = glm::vec3(0.0f);

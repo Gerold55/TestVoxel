@@ -10,6 +10,7 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
 find_package(unofficial-lua CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(VoxelEngine 
     main.cpp 
@@ -22,6 +23,14 @@ add_executable(VoxelEngine
     FontRenderer.cpp
     ParticleSystem.cpp
     ChatSystem.cpp
+    Lighting.cpp
+    Lighting.h
+    Skybox.cpp
+    Skybox.h
+    CaveGenerator.cpp
+    CaveGenerator.h
+    Model.cpp
+    Model.h
     deps/glad.c
 )
 
@@ -35,5 +44,6 @@ target_link_libraries(VoxelEngine PRIVATE
     glm::glm
     sol2::sol2
     unofficial::lua::lua
+    nlohmann_json::nlohmann_json
     opengl32
 )

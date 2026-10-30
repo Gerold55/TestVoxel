@@ -62,11 +62,8 @@ void Hotbar::toggleCreativeInventory() {
     std::cout << "[Creative Inventory] " << (isCreativeOpen ? "Opened" : "Closed") << std::endl;
 }
 
-// Helper to filter items based on Lua-defined in_creative flag and tab categories
 static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
     if (prop.name.empty() || prop.name == "air" || prop.name == "unknown") return false;
-
-    // Strictly respect the developer's Lua configuration flag
     if (!prop.in_creative) return false;
 
     bool isNature = (prop.pattern == "plantlike" || 
@@ -81,9 +78,9 @@ static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
                                    prop.name.find("gravel") != std::string::npos ||
                                    prop.name.find("bedrock") != std::string::npos);
 
-    if (tab == 0) return true;          // All creative items
-    if (tab == 1) return isNature;      // Nature & Flora tab
-    if (tab == 2) return isBuilding;    // Building blocks tab
+    if (tab == 0) return true;       
+    if (tab == 1) return isNature;      
+    if (tab == 2) return isBuilding;    
     
     return false;
 }
@@ -91,7 +88,6 @@ static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
 void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight) {
     if (!isCreativeOpen) return;
 
-    // Check tab clicks at the top of the window (3 Tabs)
     float tabW = 100.0f;
     float tabH = 24.0f;
     float tabStartY = creativeY - tabH;
@@ -104,7 +100,6 @@ void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int
         }
     }
 
-    // Check grid item clicks
     if (mouseX >= creativeX && mouseX <= (creativeX + creativeW) &&
         mouseY >= creativeY && mouseY <= (creativeY + creativeH)) {
         
@@ -155,7 +150,7 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
     float actualPadding = padding;
 
     float pixelStartX = std::round((posX + 1.0f) * 0.5f * screenWidth);
-    float pixelStartY = std::round((1.0f - posY) * 0.5f * screenHeight);
+    float pixelStartY = std::round(screenHeight - actualSlotSize - posY - 20.0f);
 
     float totalWidth = slotCount * (actualSlotSize + actualPadding);
     if (pixelStartX + totalWidth > screenWidth || pixelStartX < 0) {
@@ -180,18 +175,18 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         slotVertices.insert(slotVertices.end(), std::begin(q), std::end(q));
     };
 
-    // 1. Hotbar slots
-    for (int i = 0; i < slotCount; ++i) {
-        float sx = std::round(pixelStartX + i * (actualSlotSize + actualPadding));
-        float sy = std::round(pixelStartY);
-        float border = 3.0f;
+    if (customTextureID == 0) {
+        for (int i = 0; i < slotCount; ++i) {
+            float sx = std::round(pixelStartX + i * (actualSlotSize + actualPadding));
+            float sy = std::round(pixelStartY);
+            float border = 3.0f;
 
-        glm::vec4 borderColor = (i == activeSlot) ? glm::vec4(1.0f, 0.85f, 0.1f, 1.0f) : glm::vec4(0.25f, 0.25f, 0.25f, 0.8f);
-        addPixelQuad(sx - border, sy - border, actualSlotSize + (border * 2.0f), actualSlotSize + (border * 2.0f), borderColor);
-        addPixelQuad(sx, sy, actualSlotSize, actualSlotSize, glm::vec4(0.12f, 0.12f, 0.12f, 0.75f));
+            glm::vec4 borderColor = (i == activeSlot) ? glm::vec4(1.0f, 0.85f, 0.1f, 1.0f) : glm::vec4(0.25f, 0.25f, 0.25f, 0.8f);
+            addPixelQuad(sx - border, sy - border, actualSlotSize + (border * 2.0f), actualSlotSize + (border * 2.0f), borderColor);
+            addPixelQuad(sx, sy, actualSlotSize, actualSlotSize, glm::vec4(0.12f, 0.12f, 0.12f, 0.75f));
+        }
     }
 
-    // Count matching items for active tab
     int filteredCount = 0;
     for (int i = 1; i <= 255; ++i) {
         try {
@@ -205,7 +200,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         }
     }
 
-    // 2. Creative Inventory Panel & Tabs
     if (isCreativeOpen) {
         int cols = 9;
         int rows = (filteredCount + cols - 1) / cols;
@@ -215,7 +209,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         creativeX = std::round((screenWidth - creativeW) * 0.5f);
         creativeY = std::round((screenHeight - creativeH) * 0.5f);
 
-        // Draw 3 Tabs at top
         float tabW = 100.0f;
         float tabH = 24.0f;
         float tabStartY = creativeY - tabH;
@@ -226,7 +219,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
             addPixelQuad(tx - 1.0f, tabStartY - 1.0f, tabW + 2.0f, tabH + 2.0f, glm::vec4(0.2f, 0.2f, 0.2f, 1.0f));
         }
 
-        // Window background & border
         addPixelQuad(creativeX, creativeY, creativeW, creativeH, glm::vec4(0.75f, 0.75f, 0.75f, 0.98f));
         addPixelQuad(creativeX - 2.0f, creativeY - 2.0f, creativeW + 4.0f, creativeH + 4.0f, glm::vec4(0.2f, 0.2f, 0.2f, 1.0f));
 
@@ -269,7 +261,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(2 * sizeof(float)));
 
-    // 3. Icons
     const float faceVertices[6][18] = {
         { 0.5f,-0.5f,-0.5f, -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f },
         {-0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,   0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f,-0.5f, 0.5f },
@@ -299,26 +290,23 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
             float qY0 = centerY - halfSize;
             float qY1 = centerY + halfSize;
 
-            int texLayer = blockProp.faces[0].baseLayer;
-            if (texLayer < 0) {
-                for (int f = 0; f < 6; ++f) {
-                    if (blockProp.faces[f].baseLayer >= 0) {
-                        texLayer = blockProp.faces[f].baseLayer;
-                        break;
-                    }
-                }
-            }
+            int texLayer = blockProp.faces[0].baseLayer >= 0 ? blockProp.faces[0].baseLayer : blockProp.faces[2].baseLayer;
+            int rawOverlay = blockProp.faces[0].overlayLayer >= 0 ? blockProp.faces[0].overlayLayer : -1;
+            float overlayLayer = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
+            float tintBase = blockProp.faces[0].tintBase ? 1.0f : 0.0f;
+            float tintOverlay = blockProp.faces[0].tintOverlay ? 1.0f : 0.0f;
 
             glm::vec3 tint = blockProp.defaultTint;
 
+            // Correct V mapping for GUI UI: 0.0 at top (qY1), 1.0 at bottom (qY0)
             float plantVerts[78] = {
-                qX0, qY1, -5.0f, tint.r,  tint.g,  tint.b,  0.0f, 1.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f,
-                qX1, qY1, -5.0f, tint.r,  tint.g,  tint.b,  1.0f, 1.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f,
-                qX1, qY0, -5.0f, tint.r,  tint.g,  tint.b,  1.0f, 0.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f,
+                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY1, -5.0f, tint.r, tint.g, tint.b,  1.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
 
-                qX0, qY1, -5.0f, tint.r,  tint.g,  tint.b,  0.0f, 1.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f,
-                qX1, qY0, -5.0f, tint.r,  tint.g,  tint.b,  1.0f, 0.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f,
-                qX0, qY0, -5.0f, tint.r,  tint.g,  tint.b,  0.0f, 0.0f, (float)texLayer, -1.0f,    0.0f,  0.0f,  1.0f
+                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX0, qY0, -5.0f, tint.r, tint.g, tint.b,  0.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f
             };
 
             for (float f : plantVerts) {
@@ -337,6 +325,9 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
             else if (face == 3 && blockProp.faces[2].baseLayer >= 0) activeLayer = blockProp.faces[2].baseLayer;
 
             const FaceDefinition& faceDef = blockProp.faces[face];
+            int rawOverlay = faceDef.overlayLayer >= 0 ? faceDef.overlayLayer : -1;
+            float overlayLayer = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
+
             for (int v = 0; v < 6; ++v) {
                 glm::vec3 localPos(faceVertices[face][v * 3 + 0], faceVertices[face][v * 3 + 1], faceVertices[face][v * 3 + 2]);
                 glm::vec4 rotPos = iconTransform * glm::vec4(localPos, 1.0f);
@@ -357,7 +348,7 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
                 iconVertices.push_back(1.0f - texCoords[v * 2 + 1]);
 
                 iconVertices.push_back(static_cast<float>(activeLayer));
-                iconVertices.push_back(static_cast<float>(faceDef.overlayLayer));
+                iconVertices.push_back(overlayLayer);
                 iconVertices.push_back(faceDef.tintBase ? 1.0f : 0.0f);
                 iconVertices.push_back(faceDef.tintOverlay ? 1.0f : 0.0f);
                 iconVertices.push_back(faceShading[face]);
@@ -365,14 +356,12 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         }
     };
 
-    // Hotbar icons
     for (int i = 0; i < slotCount; ++i) {
         float sx = std::round(pixelStartX + i * (actualSlotSize + actualPadding));
         float sy = std::round(pixelStartY);
         addIcon(slots[i].blockId, sx + (actualSlotSize * 0.5f), sy + (actualSlotSize * 0.5f), actualSlotSize);
     }
 
-    // Creative grid icons
     if (isCreativeOpen) {
         float gridStartX = creativeX + 16.0f;
         float gridStartY = creativeY + 45.0f;
@@ -424,30 +413,125 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
     }
 }
 
-void Hotbar::renderSlots(GLuint uiShader) {
-    if (slotVAO == 0) return;
+void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
     glDisable(GL_DEPTH_TEST);
-    glUseProgram(uiShader);
-    glBindVertexArray(slotVAO);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    int filteredCount = 0;
-    for (int i = 1; i <= 255; ++i) {
-        try {
-            const auto& prop = BlockRegistry::getInstance().getBlock(static_cast<uint8_t>(i));
-            if (prop.name.empty() || prop.name == "air") continue;
-            if (matchesCreativeTab(prop, creativeTab)) filteredCount++;
-        } catch (...) {
-            break;
-        }
+    GLint viewport[4];
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    float screenWidth = static_cast<float>(viewport[2]);
+    float screenHeight = static_cast<float>(viewport[3]);
+
+    float actualSlotSize = slotSize <= 1.5f ? slotSize * screenHeight * 0.55f : slotSize;
+    if (actualSlotSize > 60.0f) actualSlotSize = 60.0f;
+    float totalWidth = slotCount * (actualSlotSize + padding);
+    float px = std::round((screenWidth - totalWidth) * 0.5f);
+    float py = std::round(screenHeight - actualSlotSize - posY - 20.0f);
+
+    static GLuint texQuadVAO = 0;
+    static GLuint texQuadVBO = 0;
+    if (texQuadVAO == 0) {
+        glGenVertexArrays(1, &texQuadVAO);
+        glGenBuffers(1, &texQuadVBO);
     }
 
-    int hotbarQuads = slotCount * 2;
-    int creativePanelQuads = isCreativeOpen ? (2 + 3) : 0; // Window + 3 Tabs
-    int creativeSlotQuads = isCreativeOpen ? filteredCount * 2 : 0;
-    int totalQuads = hotbarQuads + creativePanelQuads + creativeSlotQuads;
+    if (customTextureID != 0) {
+        glUseProgram(texturedUIShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, customTextureID);
+        glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
 
-    glDrawArrays(GL_TRIANGLES, 0, totalQuads * 6);
-    glBindVertexArray(0);
+        float x0 = (px / screenWidth) * 2.0f - 1.0f;
+        float y0 = 1.0f - ((py + actualSlotSize) / screenHeight) * 2.0f;
+        float x1 = ((px + totalWidth) / screenWidth) * 2.0f - 1.0f;
+        float y1 = 1.0f - (py / screenHeight) * 2.0f;
+
+        float quadVerts[] = {
+            x0, y1,  0.0f, 0.0f,
+            x1, y1,  1.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+
+            x0, y1,  0.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+            x0, y0,  0.0f, 1.0f
+        };
+
+        glBindVertexArray(texQuadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, texQuadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
+
+    if (selectedTextureID != 0) {
+        glUseProgram(texturedUIShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, selectedTextureID);
+        glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
+
+        float sx = std::round(px + activeSlot * (actualSlotSize + padding));
+        float sy = std::round(py);
+        float border = 4.0f; 
+
+        float x0 = ((sx - border) / screenWidth) * 2.0f - 1.0f;
+        float y0 = 1.0f - ((sy + actualSlotSize + border) / screenHeight) * 2.0f;
+        float x1 = ((sx + actualSlotSize + border) / screenWidth) * 2.0f - 1.0f;
+        float y1 = 1.0f - ((sy - border) / screenHeight) * 2.0f;
+
+        float highlightVerts[] = {
+            x0, y1,  0.0f, 0.0f,
+            x1, y1,  1.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+
+            x0, y1,  0.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+            x0, y0,  0.0f, 1.0f
+        };
+
+        glBindVertexArray(texQuadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, texQuadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(highlightVerts), highlightVerts, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
+
+    if (slotVAO != 0) {
+        glUseProgram(uiShader);
+        glBindVertexArray(slotVAO);
+
+        int filteredCount = 0;
+        for (int i = 1; i <= 255; ++i) {
+            try {
+                const auto& prop = BlockRegistry::getInstance().getBlock(static_cast<uint8_t>(i));
+                if (prop.name.empty() || prop.name == "air") continue;
+                if (matchesCreativeTab(prop, creativeTab)) filteredCount++;
+            } catch (...) {
+                break;
+            }
+        }
+
+        int hotbarFallbackQuads = (customTextureID == 0) ? (slotCount * 2) : 0;
+        int creativePanelQuads = isCreativeOpen ? (2 + 3) : 0;
+        int creativeSlotQuads = isCreativeOpen ? filteredCount * 2 : 0;
+        int totalQuads = hotbarFallbackQuads + creativePanelQuads + creativeSlotQuads;
+
+        if (totalQuads > 0) {
+            glDrawArrays(GL_TRIANGLES, 0, totalQuads * 6);
+        }
+        glBindVertexArray(0);
+    }
+
     glEnable(GL_DEPTH_TEST);
 }
 

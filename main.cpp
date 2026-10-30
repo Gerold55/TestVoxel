@@ -27,6 +27,9 @@
 #include "Hotbar.h"
 #include "FontRenderer.h"
 #include "ChatSystem.h"
+#include "Lighting.h"
+#include "Skybox.h"
+#include "Model.h"
 
 namespace fs = std::filesystem;
 
@@ -36,6 +39,9 @@ std::string g_ActiveWorldName = "world_alpha";
 Hotbar* g_Hotbar = nullptr;
 FontRenderer* g_FontRenderer = nullptr;
 ChatSystem* g_ChatSystem = nullptr;
+LightingSystem* g_LightingSystem = nullptr;
+Skybox* g_Skybox = nullptr;
+World* g_WorldInstance = nullptr;
 float g_FieldOfView = 70.0f;
 
 enum class GameState {
@@ -187,6 +193,49 @@ int loadTextureToLayer(const std::string& path) {
     return layer;
 }
 
+GLuint loadStandardTexture(const std::string& path) {
+    std::string finalPath = path;
+    std::vector<std::string> searchPaths = {
+        path,
+        "textures/" + path,
+        "../../textures/" + path,
+        g_CurrentModPath + "/" + path,
+        g_CurrentModPath + "/textures/" + path,
+        "../../" + g_CurrentModPath + "/" + path,
+        "games/" + g_ActiveGameFolder + "/textures/" + path,
+        "../../games/" + g_ActiveGameFolder + "/textures/" + path
+    };
+
+    bool found = false;
+    for (const auto& p : searchPaths) {
+        if (!p.empty() && fs::exists(p)) {
+            finalPath = fs::absolute(p).string();
+            found = true;
+            break;
+        }
+    }
+    if (!found) return 0;
+
+    int width, height, nrChannels;
+    stbi_set_flip_vertically_on_load(true);
+    unsigned char* data = stbi_load(finalPath.c_str(), &width, &height, &nrChannels, 4);
+    if (!data) return 0;
+
+    GLuint texID;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    stbi_image_free(data);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texID;
+}
+
 static uint8_t g_NextBlockId = 1;
 
 void registerBlockFromLua(const std::string& name, float r, float g, float b, sol::object texObj, sol::object overlayObj, sol::optional<sol::table> propsTable) {
@@ -214,15 +263,10 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
 
     if (texObj.is<std::string>()) {
         int layer = loadTextureToLayer(texObj.as<std::string>());
-        for (int f = 0; f < 6; ++f) {
-            block.faces[f].baseLayer = layer;
-        }
+        for (int f = 0; f < 6; ++f) block.faces[f].baseLayer = layer;
         if (shouldTint) {
-            if (name == "grass") {
-                block.faces[2].tintBase = true;
-            } else {
-                for (int f = 0; f < 6; ++f) block.faces[f].tintBase = true;
-            }
+            if (name == "grass") block.faces[2].tintBase = true;
+            else { for (int f = 0; f < 6; ++f) block.faces[f].tintBase = true; }
         }
     } else if (texObj.is<sol::table>()) {
         sol::table t = texObj.as<sol::table>();
@@ -239,11 +283,8 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
         block.faces[0].baseLayer = block.faces[1].baseLayer = block.faces[4].baseLayer = block.faces[5].baseLayer = sideL;
 
         if (shouldTint) {
-            if (name == "grass") {
-                block.faces[2].tintBase = true;
-            } else {
-                for (int f = 0; f < 6; ++f) block.faces[f].tintBase = true;
-            }
+            if (name == "grass") block.faces[2].tintBase = true;
+            else { for (int f = 0; f < 6; ++f) block.faces[f].tintBase = true; }
         }
     }
 
@@ -276,6 +317,9 @@ uint8_t getBlockIdLua(const std::string& name) {
     return BlockRegistry::getInstance().getBlockId(name);
 }
 
+// =========================================================================
+// SHADERS
+// =========================================================================
 const char* vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -295,6 +339,7 @@ out float TintBase;
 out float TintOverlay;
 out float LightIntensity;
 out vec3 FragPos;
+out vec3 WorldPos;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -316,11 +361,14 @@ void main() {
     TintBase = aTintBase;
     TintOverlay = aTintOverlay;
 
+    WorldPos = (model * vec4(pos, 1.0)).xyz;
+
     if (u_Unlit == 1) {
         LightIntensity = 1.0f;
     } else {
-        float sunDot = max(dot(vec3(0.0, 1.0, 0.0), u_SunDir), 0.2f);
-        LightIntensity = clamp(aFaceShading * (sunDot * 0.75f + 0.25f), 0.2f, 1.0f);
+        float sunDot = dot(vec3(0.0, 1.0, 0.0), u_SunDir);
+        float directLight = clamp(sunDot * 0.6f + 0.4f, 0.28f, 1.0f);
+        LightIntensity = clamp(aFaceShading * directLight, 0.25f, 1.0f);
     }
 
     vec4 viewPos = view * model * vec4(pos, 1.0);
@@ -339,10 +387,21 @@ in float TintBase;
 in float TintOverlay;
 in float LightIntensity;
 in vec3 FragPos;
+in vec3 WorldPos;
 
 out vec4 FragColorOut;
 uniform sampler2DArray textureArray;
 uniform int u_IsGUI;
+uniform vec3 u_SunDir;
+
+struct PointLight {
+    vec3 position;
+    vec3 color;
+    float radius;
+    float intensity;
+};
+uniform int u_NumPointLights;
+uniform PointLight u_PointLights[16];
 
 void main() {
     vec4 finalColor = vec4(TintColor, 1.0);
@@ -368,14 +427,43 @@ void main() {
         return;
     }
 
-    vec3 shadedColor = finalColor.rgb * LightIntensity;
-    float dist = length(FragPos);
-    float fogStart = 32.0f;
-    float fogEnd = 80.0f;
-    float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0f, 1.0f);
-    vec3 fogColor = vec3(0.5f, 0.8f, 0.95f);
-    vec3 finalRgb = mix(fogColor, shadedColor, fogFactor);
+    vec3 dayLightColor = vec3(1.0f, 0.98f, 0.92f);
+    vec3 sunsetLightColor = vec3(1.0f, 0.62f, 0.32f);
+    vec3 nightLightColor = vec3(0.35f, 0.5f, 0.75f);
 
+    vec3 currentSunLightColor = mix(sunsetLightColor, dayLightColor, clamp(u_SunDir.y + 0.15f, 0.0f, 1.0f));
+    if (u_SunDir.y < 0.0f) {
+        currentSunLightColor = mix(sunsetLightColor, nightLightColor, clamp(-u_SunDir.y * 2.0f, 0.0f, 1.0f));
+    }
+
+    vec3 shadedColor = finalColor.rgb * LightIntensity * currentSunLightColor;
+
+    vec3 pointLightContribution = vec3(0.0f);
+    for(int i = 0; i < u_NumPointLights && i < 16; i++) {
+        float dist = distance(WorldPos, u_PointLights[i].position);
+        if(dist < u_PointLights[i].radius) {
+            float attenuation = 1.0f - (dist / u_PointLights[i].radius);
+            attenuation = attenuation * attenuation;
+            pointLightContribution += u_PointLights[i].color * u_PointLights[i].intensity * attenuation;
+        }
+    }
+    shadedColor += finalColor.rgb * pointLightContribution;
+
+    float dist = length(FragPos);
+    float fogStart = 180.0f;
+    float fogEnd = 256.0f;
+    float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0f, 1.0f);
+    
+    vec3 dayFog = vec3(0.55f, 0.78f, 0.92f);
+    vec3 sunsetFog = vec3(0.82f, 0.48f, 0.3f);
+    vec3 nightFog = vec3(0.04f, 0.06f, 0.12f);
+    
+    vec3 fogColor = mix(sunsetFog, dayFog, clamp(u_SunDir.y + 0.2f, 0.0f, 1.0f));
+    if (u_SunDir.y < 0.0f) {
+        fogColor = mix(sunsetFog, nightFog, clamp(-u_SunDir.y * 2.0f, 0.0f, 1.0f));
+    }
+
+    vec3 finalRgb = mix(fogColor, shadedColor, fogFactor);
     FragColorOut = vec4(finalRgb, finalColor.a);
 }
 )";
@@ -383,10 +471,13 @@ void main() {
 const char* sunVertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoord;
+out vec2 TexCoord;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 void main() {
+    TexCoord = aTexCoord;
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }
 )";
@@ -394,38 +485,18 @@ void main() {
 const char* sunFragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
-void main() {
-    FragColor = vec4(1.0, 0.95, 0.6, 1.0);
-}
-)";
+in vec2 TexCoord;
+uniform sampler2D u_Texture;
+uniform int u_HasTexture;
 
-const char* cloudVertexShaderSource = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-out vec3 FragPos;
 void main() {
-    vec4 viewPos = view * model * vec4(aPos, 1.0);
-    FragPos = viewPos.xyz;
-    gl_Position = projection * viewPos;
-}
-)";
-
-const char* cloudFragmentShaderSource = R"(
-#version 330 core
-out vec4 FragColor;
-in vec3 FragPos;
-void main() {
-    float dist = length(FragPos);
-    float fogStart = 150.0f;
-    float fogEnd = 300.0f;
-    float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0f, 1.0f);
-    vec3 cloudColor = vec3(1.0f, 1.0f, 1.0f);
-    vec3 fogColor = vec3(0.5f, 0.8f, 0.95f);
-    vec3 finalColor = mix(fogColor, cloudColor, fogFactor);
-    FragColor = vec4(finalColor, 0.85f * fogFactor);
+    if (u_HasTexture == 1) {
+        vec4 texColor = texture(u_Texture, TexCoord);
+        if (texColor.a < 0.1) discard;
+        FragColor = texColor;
+    } else {
+        FragColor = vec4(1.0, 0.95, 0.6, 1.0);
+    }
 }
 )";
 
@@ -444,7 +515,7 @@ const char* wireframeFragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
 void main() {
-    FragColor = vec4(0.0, 0.0, 0.0, 0.8);
+    FragColor = vec4(0.0, 0.0, 0.0, 0.9);
 }
 )";
 
@@ -465,6 +536,96 @@ in vec4 FragColor;
 out vec4 finalColor;
 void main() {
     finalColor = FragColor;
+}
+)";
+
+const char* texturedUIVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+out vec2 TexCoords;
+void main() {
+    TexCoords = aTexCoords;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+const char* texturedUIFragmentShaderSource = R"(
+#version 330 core
+in vec2 TexCoords;
+out vec4 FragColor;
+uniform sampler2D u_Texture;
+void main() {
+    vec4 texColor = texture(u_Texture, TexCoords);
+    if (texColor.a < 0.01) discard;
+    FragColor = texColor;
+}
+)";
+
+const char* fontVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoords;
+out vec2 TexCoords;
+void main() {
+    TexCoords = aTexCoords;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+const char* fontFragmentShaderSource = R"(
+#version 330 core
+in vec2 TexCoords;
+out vec4 FragColor;
+uniform sampler2D fontTexture;
+uniform vec4 textColor;
+void main() {
+    vec4 sampled = vec4(1.0, 1.0, 1.0, texture(fontTexture, TexCoords).r);
+    FragColor = textColor * sampled;
+}
+)";
+
+// --- 3D MODEL SHADERS ---
+const char* modelVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+
+out vec2 TexCoords;
+out vec3 Normal;
+out vec3 FragPos;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main() {
+    FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+    TexCoords = aTexCoords;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}
+)";
+
+const char* modelFragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+
+in vec2 TexCoords;
+in vec3 Normal;
+in vec3 FragPos;
+
+uniform sampler2D texture_diffuse1;
+uniform vec3 u_LightDir;
+
+void main() {
+    vec3 norm = normalize(Normal);
+    float diff = max(dot(norm, -u_LightDir), 0.2f);
+    vec4 texColor = texture(texture_diffuse1, TexCoords);
+    if(texColor.a < 0.1) discard;
+    
+    FragColor = vec4(texColor.rgb * diff, texColor.a);
 }
 )";
 
@@ -493,6 +654,7 @@ int main() {
         GLFWwindow* window = glfwCreateWindow(1280, 720, "Craft & Ruin - Voxel Engine", NULL, NULL);
         if (!window) { glfwTerminate(); return -1; }
         glfwMakeContextCurrent(window);
+        glfwSwapInterval(0);
 
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
             std::cerr << "[Error] Failed to initialize GLAD\n";
@@ -506,13 +668,14 @@ int main() {
         g_Hotbar = new Hotbar();
         g_FontRenderer = new FontRenderer();
         g_ChatSystem = new ChatSystem();
+        g_LightingSystem = new LightingSystem();
+        g_Skybox = new Skybox();
+        g_Skybox->init();
 
         g_FontRenderer->init("fonts/default.ttf");
 
         glfwSetCharCallback(window, [](GLFWwindow* win, unsigned int codepoint) {
-            if (g_ChatSystem) {
-                g_ChatSystem->handleCharInput(codepoint);
-            }
+            if (g_ChatSystem) g_ChatSystem->handleCharInput(codepoint);
         });
 
         glfwSetKeyCallback(window, [](GLFWwindow* win, int key, int scancode, int action, int mods) {
@@ -535,24 +698,19 @@ int main() {
                             g_CurrentGameState = GameState::PLAYING;
                             glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                         }
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Menu Error starting game]: " << e.what() << std::endl;
+                    } catch (...) {
                         g_CurrentGameState = GameState::PLAYING;
                         glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     }
                 }
-                if (key == GLFW_KEY_ESCAPE) {
-                    glfwSetWindowShouldClose(win, true);
-                }
+                if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(win, true);
                 return;
             }
 
             if (g_CurrentGameState == GameState::PLAYING && action == GLFW_PRESS) {
                 if (key == GLFW_KEY_T || key == GLFW_KEY_SLASH) {
                     g_ChatSystem->toggleChat(win);
-                    if (key == GLFW_KEY_SLASH) {
-                        g_ChatSystem->currentInput = "/";
-                    }
+                    if (key == GLFW_KEY_SLASH) g_ChatSystem->currentInput = "/";
                     return;
                 }
 
@@ -560,19 +718,13 @@ int main() {
                     if (g_Hotbar) {
                         g_Hotbar->toggleCreativeInventory();
                         int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
-                        if (currentMode == GLFW_CURSOR_DISABLED) {
-                            glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                        } else {
-                            glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                        }
+                        if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                        else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     }
-
                     try {
                         sol::state* lua = ctx->lua;
                         sol::function toggleLuaUI = (*lua)["toggle_creative_inventory"];
-                        if (toggleLuaUI.valid()) {
-                            toggleLuaUI();
-                        }
+                        if (toggleLuaUI.valid()) toggleLuaUI();
                     } catch (...) {}
                     return;
                 }
@@ -583,18 +735,13 @@ int main() {
                         glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                         return;
                     }
-
                     int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
-                    if (currentMode == GLFW_CURSOR_DISABLED) {
-                        glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                    } else {
-                        glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    }
+                    if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                 }
             }
         });
 
-        // --- UPDATED MOUSE BUTTON CALLBACK WITH MENU CLICK SUPPORT ---
         glfwSetMouseButtonCallback(window, [](GLFWwindow* win, int button, int action, int mods) {
             if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
                 EngineContext* ctx = static_cast<EngineContext*>(glfwGetWindowUserPointer(win));
@@ -609,14 +756,9 @@ int main() {
                 if (g_CurrentGameState == GameState::MENU) {
                     try {
                         sol::function menuClick = (*lua)["handle_menu_click"];
-                        if (menuClick.valid()) {
-                            menuClick(mx, my, sw, sh);
-                        }
-                    } catch (const sol::error& e) {
-                        std::cerr << "[Lua Menu Click Error]: " << e.what() << std::endl;
-                    }
-                } 
-                else if (g_CurrentGameState == GameState::PLAYING && g_Hotbar && g_Hotbar->isCreativeOpen) {
+                        if (menuClick.valid()) menuClick(mx, my, sw, sh);
+                    } catch (...) {}
+                } else if (g_CurrentGameState == GameState::PLAYING && g_Hotbar && g_Hotbar->isCreativeOpen) {
                     g_Hotbar->handleMouseClick(mx, my, sw, sh);
                 }
             }
@@ -626,9 +768,6 @@ int main() {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.0f, 1.0f);
-
         initTextureArray();
 
         sol::state lua;
@@ -646,7 +785,33 @@ int main() {
         glAttachShader(uiProgram, compileShader(GL_FRAGMENT_SHADER, uiFragmentShaderSource));
         glLinkProgram(uiProgram);
 
-        // --- REGISTER HOTBAR TABLE FIRST SO SCRIPTS CAN ACCESS IT ---
+        GLuint texturedUIProgram = glCreateProgram();
+        glAttachShader(texturedUIProgram, compileShader(GL_VERTEX_SHADER, texturedUIVertexShaderSource));
+        glAttachShader(texturedUIProgram, compileShader(GL_FRAGMENT_SHADER, texturedUIFragmentShaderSource));
+        glLinkProgram(texturedUIProgram);
+
+        GLuint fontProgram = glCreateProgram();
+        glAttachShader(fontProgram, compileShader(GL_VERTEX_SHADER, fontVertexShaderSource));
+        glAttachShader(fontProgram, compileShader(GL_FRAGMENT_SHADER, fontFragmentShaderSource));
+        glLinkProgram(fontProgram);
+
+        // Compile 3D Model Shader Program
+        GLuint modelShaderProgram = glCreateProgram();
+        glAttachShader(modelShaderProgram, compileShader(GL_VERTEX_SHADER, modelVertexShaderSource));
+        glAttachShader(modelShaderProgram, compileShader(GL_FRAGMENT_SHADER, modelFragmentShaderSource));
+        glLinkProgram(modelShaderProgram);
+
+        // --- LUA USETYPES FOR BONES & MODELS ---
+        lua.new_usertype<Bone>("Bone",
+            "set_rotation", [](Bone& b, float x, float y, float z) { b.rotation = glm::vec3(x, y, z); },
+            "get_rotation", [](Bone& b) { return std::make_tuple(b.rotation.x, b.rotation.y, b.rotation.z); },
+            "set_position", [](Bone& b, float x, float y, float z) { b.position = glm::vec3(x, y, z); }
+        );
+
+        lua.new_usertype<AnimatedModel>("Model",
+            "get_bone", &AnimatedModel::getBone
+        );
+
         sol::table hotbarTable = lua.create_named_table("hotbar");
         hotbarTable["set_size"] = [](int size) { if (g_Hotbar) g_Hotbar->resize(size); };
         hotbarTable["get_size"] = []() { return g_Hotbar ? g_Hotbar->slotCount : 9; };
@@ -655,10 +820,8 @@ int main() {
         hotbarTable["set_slot"] = [](int slotIndex, const std::string& blockName) {
             if (g_Hotbar) {
                 uint8_t blockId = BlockRegistry::getInstance().getBlockId(blockName);
-                int adjustedIndex = slotIndex - 1;
-                if (adjustedIndex >= 0 && adjustedIndex < g_Hotbar->slotCount) {
-                    g_Hotbar->setSlot(adjustedIndex, blockId, 64);
-                }
+                int adj = slotIndex - 1;
+                if (adj >= 0 && adj < g_Hotbar->slotCount) g_Hotbar->setSlot(adj, blockId, 64);
             }
         };
         hotbarTable["get_active_slot"] = []() { return g_Hotbar ? g_Hotbar->activeSlot + 1 : 1; };
@@ -677,18 +840,74 @@ int main() {
             if (slot.blockId == 0) return "air";
             return BlockRegistry::getInstance().getBlock(slot.blockId).name;
         };
+        hotbarTable["set_texture"] = [](std::string path) {
+            if (g_Hotbar) g_Hotbar->customTextureID = loadStandardTexture(path);
+        };
+        hotbarTable["set_selected_texture"] = [](std::string path) {
+            if (g_Hotbar) g_Hotbar->selectedTextureID = loadStandardTexture(path);
+        };
+
+        auto skyTable = lua.create_named_table("sky");
+        skyTable["set_time"] = [](float time) { if (g_LightingSystem) g_LightingSystem->customTimeOfDay = time; };
+        skyTable["get_time"] = []() { return g_LightingSystem ? g_LightingSystem->getTimeOfDay() : 0.0f; };
+        skyTable["set_moon_phase"] = [](int phase) { if (g_LightingSystem) g_LightingSystem->forcedMoonPhase = phase; };
+        skyTable["get_moon_phase"] = []() { return g_LightingSystem ? g_LightingSystem->getMoonPhase() : 0; };
+        skyTable["set_moon_textures"] = [](sol::table paths) {
+            if (!g_LightingSystem) return;
+            std::vector<std::string> pList;
+            for (int i = 0; i < paths.size(); ++i) pList.push_back(paths[i + 1]);
+            g_LightingSystem->setMoonPhaseTextures(pList);
+        };
+        skyTable["set_rain_intensity"] = [](float intensity) {
+            if (g_LightingSystem) g_LightingSystem->weatherRainIntensity = glm::clamp(intensity, 0.0f, 1.0f);
+        };
+        skyTable["get_rain_intensity"] = []() { return g_LightingSystem ? g_LightingSystem->weatherRainIntensity : 0.0f; };
+        skyTable["set_sun_color"] = [](float r, float g, float b) { if (g_LightingSystem) g_LightingSystem->setSunColor(r, g, b); };
+        skyTable["set_ambient_color"] = [](float r, float g, float b) { if (g_LightingSystem) g_LightingSystem->setAmbientColor(r, g, b); };
+        skyTable["set_fog_color"] = [](float r, float g, float b) { if (g_LightingSystem) g_LightingSystem->setFogColor(r, g, b); };
+        skyTable["set_sun_intensity"] = [](float intensity) { if (g_LightingSystem) g_LightingSystem->setSunIntensity(intensity); };
+        skyTable["set_ambient_intensity"] = [](float intensity) { if (g_LightingSystem) g_LightingSystem->setAmbientIntensity(intensity); };
+        skyTable["reset"] = []() { if (g_LightingSystem) g_LightingSystem->resetToDefaults(); };
+        skyTable["add_light"] = [](float x, float y, float z, float r, float g, float b, float radius, float intensity) {
+            return g_LightingSystem ? g_LightingSystem->addPointLight(glm::vec3(x, y, z), glm::vec3(r, g, b), radius, intensity) : -1;
+        };
+        skyTable["remove_light"] = [](int id) { if (g_LightingSystem) g_LightingSystem->removePointLight(id); };
 
         auto engineTable = lua.create_named_table("engine");
         engineTable["register_block"] = &registerBlockFromLua;
         engineTable["get_block_id"] = &getBlockIdLua;
         engineTable["set_fov"] = [](float fov) { g_FieldOfView = fov; };
+        engineTable["set_sun_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setSunTexture(path); };
+        engineTable["set_moon_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setMoonTexture(path); };
+        
+        // --- MODEL LOADING & MANAGEMENT HOOK FOR LUA ---
+        engineTable["load_model"] = [](std::string path) {
+            auto model = std::make_shared<AnimatedModel>();
+            model->loadFromFile(path);
+            return model;
+        };
+
+        engineTable["set_block"] = [](int x, int y, int z, const std::string& blockName) {
+            if (g_WorldInstance) {
+                uint8_t id = BlockRegistry::getInstance().getBlockId(blockName);
+                g_WorldInstance->setBlockAt(x, y, z, id);
+            }
+        };
+        engineTable["get_block_name"] = [](int x, int y, int z) -> std::string {
+            if (g_WorldInstance) {
+                uint8_t id = g_WorldInstance->getBlockAt(x, y, z);
+                if (id == 0) return "air";
+                return BlockRegistry::getInstance().getBlock(id).name;
+            }
+            return "air";
+        };
 
         engineTable["draw_text"] = [&](std::string text, float x, float y) {
             if (g_FontRenderer) {
                 int fw, fh;
                 glfwGetFramebufferSize(window, &fw, &fh);
                 float aspect = static_cast<float>(fw) / static_cast<float>(fh);
-                g_FontRenderer->renderText(uiProgram, text, x, y, 0.05f, 0.05f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), aspect);
+                g_FontRenderer->renderText(fontProgram, text, x, y, 0.05f, 0.05f, glm::vec4(1.0f), aspect);
             }
         };
 
@@ -697,87 +916,50 @@ int main() {
             sol::table t = lua.create_table();
             int idx = 1;
             for (const auto& g : games) {
-                sol::table gameTable = lua.create_table();
-                gameTable["folder"] = g.folderName;
-                gameTable["title"] = g.title;
-                gameTable["author"] = g.author;
-                gameTable["description"] = g.description;
-                t[idx++] = gameTable;
+                sol::table gt = lua.create_table();
+                gt["folder"] = g.folderName; gt["title"] = g.title; gt["author"] = g.author; gt["description"] = g.description;
+                t[idx++] = gt;
             }
             return t;
         };
-
         engineTable["get_worlds"] = [&]() {
             auto worlds = getAvailableWorlds();
             sol::table t = lua.create_table();
             int idx = 1;
-            for (const auto& w : worlds) {
-                t[idx++] = w;
-            }
+            for (const auto& w : worlds) t[idx++] = w;
             return t;
         };
-
         engineTable["get_active_game"] = []() { return g_ActiveGameFolder; };
         engineTable["set_active_game"] = [](std::string name) { g_ActiveGameFolder = name; };
         engineTable["get_active_world"] = []() { return g_ActiveWorldName; };
         engineTable["set_active_world"] = [](std::string name) { g_ActiveWorldName = name; };
         engineTable["quit"] = [&]() { glfwSetWindowShouldClose(window, true); };
-
         engineTable["start_game"] = [&]() {
-            std::cout << "[Engine] Starting game state..." << std::endl;
             g_CurrentGameState = GameState::PLAYING;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         };
 
-        // --- LOAD MODS & SCRIPTS WITH DYNAMIC MOD PATH TRACKING ---
-        std::vector<std::string> modSearchPaths = {
-            "mods",
-            "../mods",
-            "../../mods",
-            "games/" + g_ActiveGameFolder + "/mods",
-            "../games/" + g_ActiveGameFolder + "/mods",
-            "../../games/" + g_ActiveGameFolder + "/mods"
-        };
-
+        std::vector<std::string> modSearchPaths = { "mods", "../mods", "../../mods", "games/" + g_ActiveGameFolder + "/mods" };
         for (const auto& searchPath : modSearchPaths) {
             std::string resolvedPath = searchPath;
-            if (!fs::exists(resolvedPath) && fs::exists("../../" + searchPath)) {
-                resolvedPath = "../../" + searchPath;
-            }
-
+            if (!fs::exists(resolvedPath) && fs::exists("../../" + searchPath)) resolvedPath = "../../" + searchPath;
             if (fs::exists(resolvedPath)) {
-                std::cout << "[ModLoader] Scanning: " << fs::absolute(resolvedPath) << std::endl;
                 for (const auto& entry : fs::recursive_directory_iterator(resolvedPath)) {
-                    if (entry.is_regular_file()) {
-                        std::string ext = entry.path().extension().string();
-                        if (ext == ".lua") {
-                            std::string scriptPath = entry.path().string();
-                            
-                            g_CurrentModPath = entry.path().parent_path().string();
-                            lua["g_CurrentModPath"] = g_CurrentModPath;
-
-                            try {
-                                lua.script_file(scriptPath);
-                                std::cout << "  -> [Loaded]: " << scriptPath << std::endl;
-                            } catch (const sol::error& e) {
-                                std::cerr << "  -> [Lua Error in " << scriptPath << "]: " << e.what() << std::endl;
-                            }
-                        }
+                    if (entry.is_regular_file() && entry.path().extension().string() == ".lua") {
+                        g_CurrentModPath = entry.path().parent_path().string();
+                        lua["g_CurrentModPath"] = g_CurrentModPath;
+                        try { lua.script_file(entry.path().string()); } catch (...) {}
                     }
                 }
             }
         }
 
         lua.new_usertype<ChunkMesh>("Chunk",
-            "set_block", &ChunkMesh::setBlock,
-            "setBlock",  &ChunkMesh::setBlock,
-            "get_block", &ChunkMesh::getBlock,
-            "getBlock",  &ChunkMesh::getBlock,
+            "set_block", &ChunkMesh::setBlock, "setBlock", &ChunkMesh::setBlock,
+            "get_block", &ChunkMesh::getBlock, "getBlock", &ChunkMesh::getBlock,
             "set_block_with_meta", &ChunkMesh::setBlockWithMeta,
-            "set_metadata", &ChunkMesh::setMetadata,
-            "get_metadata", &ChunkMesh::getMetadata,
-            "generate_mesh_data", &ChunkMesh::generateMeshData,
-            "upload_mesh", &ChunkMesh::uploadMesh
+            "set_metadata", &ChunkMesh::setMetadata, "get_metadata", &ChunkMesh::getMetadata,
+            "generate_mesh_data", &ChunkMesh::generateMeshData, "upload_mesh", &ChunkMesh::uploadMesh
         );
 
         GLuint shaderProgram = glCreateProgram();
@@ -790,81 +972,37 @@ int main() {
         glAttachShader(sunProgram, compileShader(GL_FRAGMENT_SHADER, sunFragmentShaderSource));
         glLinkProgram(sunProgram);
 
-        GLuint cloudProgram = glCreateProgram();
-        glAttachShader(cloudProgram, compileShader(GL_VERTEX_SHADER, cloudVertexShaderSource));
-        glAttachShader(cloudProgram, compileShader(GL_FRAGMENT_SHADER, cloudFragmentShaderSource));
-        glLinkProgram(cloudProgram);
-
         GLuint wireframeProgram = glCreateProgram();
         glAttachShader(wireframeProgram, compileShader(GL_VERTEX_SHADER, wireframeVertexShaderSource));
         glAttachShader(wireframeProgram, compileShader(GL_FRAGMENT_SHADER, wireframeFragmentShaderSource));
         glLinkProgram(wireframeProgram);
 
-        float sunVertices[] = {
-            -4.0f,  4.0f, 0.0f,
-            -4.0f, -4.0f, 0.0f,
-             4.0f, -4.0f, 0.0f,
-             4.0f,  4.0f, 0.0f
-        };
+        float sunVertices[] = { -12.0f, 12.0f, 0.0f, 0.0f, 1.0f, -12.0f, -12.0f, 0.0f, 0.0f, 0.0f, 12.0f, -12.0f, 0.0f, 1.0f, 0.0f, 12.0f, 12.0f, 0.0f, 1.0f, 1.0f };
         unsigned int sunIndices[] = { 0, 1, 2, 2, 3, 0 };
         GLuint sunVAO, sunVBO, sunEBO;
-        glGenVertexArrays(1, &sunVAO);
-        glGenBuffers(1, &sunVBO);
-        glGenBuffers(1, &sunEBO);
+        glGenVertexArrays(1, &sunVAO); glGenBuffers(1, &sunVBO); glGenBuffers(1, &sunEBO);
         glBindVertexArray(sunVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, sunVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(sunVertices), sunVertices, GL_STATIC_DRAW);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sunEBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(sunIndices), sunIndices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, sunVBO); glBufferData(GL_ARRAY_BUFFER, sizeof(sunVertices), sunVertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sunEBO); glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(sunIndices), sunIndices, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
         glBindVertexArray(0);
 
-        float cloudVertices[] = {
-            -256.0f, 0.0f, -256.0f,
-            -256.0f, 0.0f,  256.0f,
-             256.0f, 0.0f,  256.0f,
-             256.0f, 0.0f, -256.0f
-        };
-        unsigned int cloudIndices[] = { 0, 1, 2, 2, 3, 0 };
-        GLuint cloudVAO, cloudVBO, cloudEBO;
-        glGenVertexArrays(1, &cloudVAO);
-        glGenBuffers(1, &cloudVBO);
-        glGenBuffers(1, &cloudEBO);
-        glBindVertexArray(cloudVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, cloudVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(cloudVertices), cloudVertices, GL_STATIC_DRAW);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cloudEBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(cloudIndices), cloudIndices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
-
-        float crosshairVertices[] = {
-            -0.015f,  0.000f,  1.0f, 1.0f, 1.0f, 0.8f,
-             0.015f,  0.000f,  1.0f, 1.0f, 1.0f, 0.8f,
-             0.000f, -0.025f,  1.0f, 1.0f, 1.0f, 0.8f,
-             0.000f,  0.025f,  1.0f, 1.0f, 1.0f, 0.8f
-        };
+        float crosshairVertices[] = { -0.015f, 0.0f, 1,1,1,0.8f, 0.015f, 0.0f, 1,1,1,0.8f, 0.0f, -0.025f, 1,1,1,0.8f, 0.0f, 0.025f, 1,1,1,0.8f };
         GLuint crosshairVAO, crosshairVBO;
-        glGenVertexArrays(1, &crosshairVAO);
-        glGenBuffers(1, &crosshairVBO);
+        glGenVertexArrays(1, &crosshairVAO); glGenBuffers(1, &crosshairVBO);
         glBindVertexArray(crosshairVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, crosshairVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(crosshairVertices), crosshairVertices, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
+        glBindBuffer(GL_ARRAY_BUFFER, crosshairVBO); glBufferData(GL_ARRAY_BUFFER, sizeof(crosshairVertices), crosshairVertices, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1); glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
 
         World world;
+        g_WorldInstance = &world;
         Player player;
-        
         player.position = glm::vec3(8.0f, 100.0f, 8.0f);
 
         EngineContext ctx;
-        ctx.player = &player;
-        ctx.lua = &lua;
+        ctx.player = &player; ctx.lua = &lua;
         glfwSetWindowUserPointer(window, &ctx);
 
         glfwSetCursorPosCallback(window, [](GLFWwindow* win, double xpos, double ypos) {
@@ -887,19 +1025,6 @@ int main() {
             float deltaTime = currentFrameTime - lastFrameTime;
             lastFrameTime = currentFrameTime;
 
-            static float fpsTimer = 0.0f;
-            static int frameCount = 0;
-            frameCount++;
-            fpsTimer += deltaTime;
-
-            if (fpsTimer >= 1.0f) {
-                float fps = static_cast<float>(frameCount) / fpsTimer;
-                std::string title = "Craft & Ruin - Voxel Engine | FPS: " + std::to_string(static_cast<int>(fps));
-                glfwSetWindowTitle(window, title.c_str());
-                frameCount = 0;
-                fpsTimer = 0.0f;
-            }
-
             glfwPollEvents();
 
             int width, height;
@@ -916,15 +1041,23 @@ int main() {
                             if (slotIndex < g_Hotbar->slotCount) g_Hotbar->activeSlot = slotIndex;
                         }
                     }
-
                     world.update(player.position, lua);
                     player.update(deltaTime, world, window, lua);
 
+                    // --- UPDATE ANIMATIONS VIA LUA HOOK ---
+                    try {
+                        sol::function updateAnimFunc = lua["update_player_animation"];
+                        if (updateAnimFunc.valid()) {
+                            bool isMoving = (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS || 
+                                             glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS || 
+                                             glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS || 
+                                             glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS);
+                            updateAnimFunc(deltaTime, isMoving, player.pitch);
+                        }
+                    } catch (...) {}
+
                     fluidTimer += deltaTime;
-                    if (fluidTimer >= 0.15f) {
-                        world.updateFluids();
-                        fluidTimer = 0.0f;
-                    }
+                    if (fluidTimer >= 0.15f) { world.updateFluids(); fluidTimer = 0.0f; }
                 }
             }
 
@@ -940,33 +1073,53 @@ int main() {
             bool leftPress = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
             bool rightPress = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
-            if (g_CurrentGameState == GameState::PLAYING) {
-                if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
-                    if (leftPress && !leftMousePressedLast && rayResult.hit) {
-                        world.setBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, 0);
-                    }
-                    if (rightPress && !rightMousePressedLast && rayResult.hit) {
-                        uint8_t selectedBlock = g_Hotbar->getActiveBlockId();
-                        if (selectedBlock != 0) {
-                            uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
-                            bool replaceTarget = false;
+            if (g_CurrentGameState == GameState::PLAYING && isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
+                uint8_t activeBlockId = g_Hotbar->getActiveBlockId();
+                std::string activeItemName = (activeBlockId != 0) ? BlockRegistry::getInstance().getBlock(activeBlockId).name : "air";
 
-                            if (targetBlockId != 0) {
-                                const auto& prop = BlockRegistry::getInstance().getBlock(targetBlockId);
-                                if (prop.name == "water" || prop.name == "flowing_water" || 
-                                    prop.name == "short_grass" || prop.name == "flower_red" || prop.pattern == "plantlike") {
-                                    replaceTarget = true;
+                if (leftPress && !leftMousePressedLast && rayResult.hit) {
+                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    if (targetBlockId != 0) {
+                        const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
+                        if (activeItemName.find("scythe") != std::string::npos) {
+                            sol::protected_function scytheFunc = lua["on_use_scythe"];
+                            if (scytheFunc.valid()) {
+                                scytheFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name);
+                            }
+                        } else {
+                            world.setBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, 0);
+                        }
+                    }
+                }
+
+                if (rightPress && !rightMousePressedLast && rayResult.hit) {
+                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    if (targetBlockId != 0) {
+                        const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
+                        if (activeItemName.find("hoe") != std::string::npos) {
+                            sol::protected_function hoeFunc = lua["on_use_hoe"];
+                            if (hoeFunc.valid()) {
+                                hoeFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name);
+                            }
+                        } else {
+                            sol::protected_function clickFunc = lua["on_right_click_block"];
+                            bool handled = false;
+                            if (clickFunc.valid()) {
+                                sol::protected_function_result res = clickFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name, activeItemName);
+                                if (res.valid()) handled = res.get<bool>();
+                            }
+
+                            if (!handled) {
+                                uint8_t selectedBlock = g_Hotbar->getActiveBlockId();
+                                if (selectedBlock != 0) {
+                                    bool replaceTarget = false;
+                                    if (targetProp.name == "water" || targetProp.name == "flowing_water" || targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
+                                        replaceTarget = true;
+                                    }
+                                    glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (rayResult.blockPos + rayResult.faceNormal);
+                                    world.setBlockAt(placePos.x, placePos.y, placePos.z, selectedBlock);
                                 }
                             }
-
-                            glm::ivec3 placePos;
-                            if (replaceTarget) {
-                                placePos = rayResult.blockPos;
-                            } else {
-                                placePos = rayResult.blockPos + rayResult.faceNormal;
-                            }
-
-                            world.setBlockAt(placePos.x, placePos.y, placePos.z, selectedBlock);
                         }
                     }
                 }
@@ -978,14 +1131,17 @@ int main() {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-            glm::mat4 proj = glm::perspective(glm::radians(g_FieldOfView), aspectRatio, 0.1f, 100.0f);
+            glm::mat4 proj = glm::perspective(glm::radians(g_FieldOfView), aspectRatio, 0.1f, 500.0f);
             glm::mat4 view = player.getViewMatrix();
 
-            float timeOfDay = static_cast<float>(glfwGetTime()) * 0.03f;
-            glm::vec3 sunDir = glm::normalize(glm::vec3(cos(timeOfDay), sin(timeOfDay), 0.3f));
+            glm::vec3 sunDir = g_LightingSystem->getSunDirection();
+            int moonPhase = g_LightingSystem->getMoonPhase();
 
             if (g_CurrentGameState == GameState::PLAYING) {
-                // Render World
+                // --- RENDER SKYBOX ---
+                g_Skybox->render(view, proj, sunDir.y);
+
+                // --- RENDER WORLD ---
                 glUseProgram(shaderProgram);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, g_TextureArrayID);
@@ -995,43 +1151,71 @@ int main() {
                 glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
                 glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
 
+                const auto& pointLights = g_LightingSystem->getPointLights();
+                glUniform1i(glGetUniformLocation(shaderProgram, "u_NumPointLights"), static_cast<int>(pointLights.size()));
+                for (size_t i = 0; i < pointLights.size() && i < 16; ++i) {
+                    std::string base = "u_PointLights[" + std::to_string(i) + "].";
+                    glUniform3f(glGetUniformLocation(shaderProgram, (base + "position").c_str()), pointLights[i].position.x, pointLights[i].position.y, pointLights[i].position.z);
+                    glUniform3f(glGetUniformLocation(shaderProgram, (base + "color").c_str()), pointLights[i].color.x, pointLights[i].color.y, pointLights[i].color.z);
+                    glUniform1f(glGetUniformLocation(shaderProgram, (base + "radius").c_str()), pointLights[i].radius);
+                    glUniform1f(glGetUniformLocation(shaderProgram, (base + "intensity").c_str()), pointLights[i].intensity);
+                }
+
                 glEnable(GL_DEPTH_TEST);
-                glDepthMask(GL_TRUE); 
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glEnable(GL_CULL_FACE);
-                glCullFace(GL_BACK);
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_Unlit"), 0);
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_IsGUI"), 0);
 
-                world.render(shaderProgram);
+                // --- PASS 1: OPAQUE TERRAIN ---
+                glDepthMask(GL_TRUE);
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+                for (auto& pair : world.chunks) {
+                    if (pair.second->opaqueVertexCount > 0 && pair.second->opaqueVAO != 0) {
+                        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
+                            pair.first.first * CHUNK_WIDTH, 0.0f, pair.first.second * CHUNK_WIDTH
+                        ));
+                        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+                        pair.second->drawOpaque();
+                    }
+                }
 
-                // Render Sun
-                glUseProgram(sunProgram);
-                glm::vec3 sunWorldPos = player.position + (sunDir * 80.0f);
-                glm::mat4 sunModel = glm::translate(glm::mat4(1.0f), sunWorldPos);
-                sunModel[0][0] = view[0][0]; sunModel[0][1] = view[1][0]; sunModel[0][2] = view[2][0];
-                sunModel[1][0] = view[0][1]; sunModel[1][1] = view[1][1]; sunModel[1][2] = view[2][1];
-                sunModel[2][0] = view[0][2]; sunModel[2][1] = view[1][2]; sunModel[2][2] = view[2][2];
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(sunModel));
-                glBindVertexArray(sunVAO);
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
+                // --- PASS 2: TRANSPARENT TERRAIN (Water, Leaves, Plants) ---
+                glDepthMask(GL_FALSE);
+                glDisable(GL_CULL_FACE); // Double-sided rendering for cross-planes and water
+                for (auto& pair : world.chunks) {
+                    if (pair.second->transparentVertexCount > 0 && pair.second->transparentVAO != 0) {
+                        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
+                            pair.first.first * CHUNK_WIDTH, 0.0f, pair.first.second * CHUNK_WIDTH
+                        ));
+                        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+                        pair.second->drawTransparent();
+                    }
+                }
+                glEnable(GL_CULL_FACE);
+                glDepthMask(GL_TRUE);
 
-                // Render Clouds
-                glUseProgram(cloudProgram);
-                float cloudDrift = static_cast<float>(glfwGetTime()) * 0.8f;
-                glm::vec3 cloudCenter = glm::vec3(player.position.x - fmod(player.position.x + cloudDrift, 256.0f), 120.0f, player.position.z - fmod(player.position.z, 256.0f));
-                glm::mat4 cloudModel = glm::translate(glm::mat4(1.0f), cloudCenter);
-                glUniformMatrix4fv(glGetUniformLocation(cloudProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-                glUniformMatrix4fv(glGetUniformLocation(cloudProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-                glUniformMatrix4fv(glGetUniformLocation(cloudProgram, "model"), 1, GL_FALSE, glm::value_ptr(cloudModel));
-                glBindVertexArray(cloudVAO);
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
+                // --- RENDER 3D ANIMATED MODEL PASS ---
+                glUseProgram(modelShaderProgram);
+                glUniformMatrix4fv(glGetUniformLocation(modelShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+                glUniformMatrix4fv(glGetUniformLocation(modelShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniform3f(glGetUniformLocation(modelShaderProgram, "u_LightDir"), sunDir.x, sunDir.y, sunDir.z);
 
+                glm::mat4 modelMatrix = glm::translate(glm::mat4(1.0f), player.position);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(-player.yaw + 90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                
+                try {
+                    sol::object modelObj = lua["g_PlayerModel"];
+                    if (modelObj.is<std::shared_ptr<AnimatedModel>>()) {
+                        auto model = modelObj.as<std::shared_ptr<AnimatedModel>>();
+                        if (model) {
+                            model->draw(modelShaderProgram, modelMatrix);
+                        }
+                    }
+                } catch (...) {}
+
+                // --- BLOCK SELECTION WIREFRAME OUTLINE ---
                 if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen) && rayResult.hit) {
                     glUseProgram(wireframeProgram);
                     glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(rayResult.blockPos) + glm::vec3(0.5f));
@@ -1040,7 +1224,9 @@ int main() {
                     glUniformMatrix4fv(glGetUniformLocation(wireframeProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
                     
                     glEnable(GL_DEPTH_TEST);
+                    glDepthFunc(GL_LESS);
                     glDepthMask(GL_TRUE);
+                    glDisable(GL_BLEND);
                     glDisable(GL_CULL_FACE);
                     glLineWidth(3.0f);
 
@@ -1060,7 +1246,7 @@ int main() {
                             -0.5f, -0.5f, -0.5f, -0.5f, -0.5f,  0.5f,
                              0.5f, -0.5f, -0.5f,  0.5f, -0.5f,  0.5f,
                              0.5f,  0.5f, -0.5f,  0.5f,  0.5f,  0.5f,
-                            -0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f
+                            -0.5f,  0.5f, -0.5f, -0.5f,  0.5f, -0.5f
                         };
                         glGenVertexArrays(1, &boxVAO);
                         glGenBuffers(1, &boxVBO);
@@ -1077,8 +1263,53 @@ int main() {
                     glBindVertexArray(0);
 
                     glEnable(GL_CULL_FACE);
+                    glEnable(GL_BLEND);
                 }
 
+                // --- RENDER SUN & MOON ---
+                glUseProgram(sunProgram);
+                glm::vec3 sunWorldPos = player.position + (sunDir * 80.0f);
+                glm::mat4 sunModel = glm::translate(glm::mat4(1.0f), sunWorldPos);
+                sunModel[0][0] = view[0][0]; sunModel[0][1] = view[1][0]; sunModel[0][2] = view[2][0];
+                sunModel[1][0] = view[0][1]; sunModel[1][1] = view[1][1]; sunModel[1][2] = view[2][1];
+                sunModel[2][0] = view[0][2]; sunModel[2][1] = view[1][2]; sunModel[2][2] = view[2][2];
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(sunModel));
+                
+                if (g_LightingSystem->sunTextureID != 0) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, g_LightingSystem->sunTextureID);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
+                } else {
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
+                }
+
+                glBindVertexArray(sunVAO);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+                glm::vec3 moonDir = -sunDir;
+                glm::vec3 moonWorldPos = player.position + (moonDir * 80.0f);
+                glm::mat4 moonModel = glm::translate(glm::mat4(1.0f), moonWorldPos);
+                moonModel[0][0] = view[0][0]; moonModel[0][1] = view[1][0]; moonModel[0][2] = view[2][0];
+                moonModel[1][0] = view[0][1]; moonModel[1][1] = view[1][1]; moonModel[1][2] = view[2][1];
+                moonModel[2][0] = view[0][2]; moonModel[2][1] = view[1][2]; moonModel[2][2] = view[2][2];
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(moonModel));
+
+                GLuint activeMoonTex = g_LightingSystem->moonTextureIDs[moonPhase] != 0 ? g_LightingSystem->moonTextureIDs[moonPhase] : g_LightingSystem->moonTextureIDs[0];
+                if (activeMoonTex != 0) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, activeMoonTex);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
+                } else {
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
+                }
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+                glBindVertexArray(0);
+
+                // --- UI & OVERLAYS ---
                 glDisable(GL_DEPTH_TEST);
                 glUseProgram(uiProgram);
                 if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
@@ -1089,23 +1320,18 @@ int main() {
                 }
 
                 g_Hotbar->updateBuffers(width, height);
-                g_Hotbar->renderSlots(uiProgram);
+                g_Hotbar->renderSlots(uiProgram, texturedUIProgram);
 
                 try {
                     sol::function renderLuaUI = lua["render_creative_inventory"];
-                    if (renderLuaUI.valid()) {
-                        renderLuaUI(width, height);
-                    }
+                    if (renderLuaUI.valid()) renderLuaUI(width, height);
                 } catch (...) {}
 
-                if (g_ChatSystem) {
-                    g_ChatSystem->renderChatOverlay(g_FontRenderer, width, height);
-                }
+                if (g_ChatSystem) g_ChatSystem->renderChatOverlay(g_FontRenderer, fontProgram, width, height);
 
                 glEnable(GL_DEPTH_TEST);
                 glUseProgram(shaderProgram);
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_Unlit"), 1);
-
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, g_TextureArrayID);
                 glUniform1i(glGetUniformLocation(shaderProgram, "textureArray"), 0);
@@ -1115,12 +1341,9 @@ int main() {
                 // --- RENDER MAIN MENU ---
                 glDisable(GL_DEPTH_TEST);
                 glUseProgram(uiProgram);
-
                 try {
                     sol::function renderMenu = lua["render_main_menu"];
-                    if (renderMenu.valid()) {
-                        renderMenu(width, height);
-                    }
+                    if (renderMenu.valid()) renderMenu(width, height);
                 } catch (...) {}
             }
 
@@ -1133,8 +1356,9 @@ int main() {
         delete g_Hotbar;
         delete g_FontRenderer;
         delete g_ChatSystem;
-    } 
-    catch (const std::exception& e) {
+        delete g_LightingSystem;
+        delete g_Skybox;
+    } catch (const std::exception& e) {
         std::cerr << "\n[CRITICAL EXCEPTION]: " << e.what() << std::endl;
         system("pause");
         return -1;

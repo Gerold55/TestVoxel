@@ -28,7 +28,7 @@ public:
     void handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight);
 
     void updateBuffers(int screenWidth, int screenHeight);
-    void renderSlots(GLuint uiShader);
+    void renderSlots(GLuint uiShader, GLuint texturedUIShader);
     void render3DIcons(GLuint voxelShader, GLuint textureArrayID);
 
     int slotCount = 9;
@@ -37,6 +37,9 @@ public:
     float padding = 8.0f;
     float posX = 0.0f;
     float posY = 0.0f;
+
+    GLuint customTextureID = 0;   // Hotbar background strip texture loaded from Lua
+    GLuint selectedTextureID = 0; // Active slot highlight frame texture loaded from Lua
 
     std::vector<HotbarSlot> slots;
 

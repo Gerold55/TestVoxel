@@ -1,29 +1,28 @@
 #pragma once
+
 #include <string>
-#include <vector>
-#include <functional>
+#include <deque>
+#include <glad/glad.h>
 
 struct GLFWwindow;
-namespace sol {
-    class state;
-}
 class FontRenderer;
-
-struct ChatMessage {
-    std::string text;
-    float timestamp;
-};
 
 class ChatSystem {
 public:
     bool isOpen = false;
     std::string currentInput = "";
-    std::vector<ChatMessage> history;
-    std::vector<std::string> commandHistory;
+    std::deque<std::string> messageHistory;
+    size_t maxHistorySize = 50;
 
     void toggleChat(GLFWwindow* window);
+    void addMessage(const std::string& message);
+    
     void handleCharInput(unsigned int codepoint);
     void handleKeyInput(int key, int scancode, int action, int mods, GLFWwindow* window);
-    void executeCommand(const std::string& cmd, sol::state& lua);
-    void renderChatOverlay(FontRenderer* fontRenderer, int windowWidth, int windowHeight);
+
+    // Accept uiProgram so FontRenderer gets the valid shader
+    void renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight);
+
+private:
+    void executeCommand(const std::string& cmd);
 };

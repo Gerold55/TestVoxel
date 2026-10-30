@@ -2,6 +2,7 @@
 #include "ChunkMesh.h"
 #include "Block.h"
 #include "Types.h"
+#include "CaveGenerator.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
@@ -10,10 +11,15 @@
 #include <chrono>
 #include <mutex>
 #include <future>
+#include <random>
 
 static std::mutex g_WorldLuaMutex;
+static unsigned int g_WorldSeed = 1337;
 
 World::World() {
+    std::random_device rd;
+    g_WorldSeed = rd() ^ static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
+    std::cout << "[World] Initialized with random seed: " << g_WorldSeed << std::endl;
 }
 
 World::~World() {
@@ -24,9 +30,9 @@ void World::update(const glm::vec3& playerPos, sol::state& lua) {
     int playerChunkX = static_cast<int>(std::floor(playerPos.x / CHUNK_WIDTH));
     int playerChunkZ = static_cast<int>(std::floor(playerPos.z / CHUNK_WIDTH));
 
-    int renderDistance = 3; // Stable render distance for smooth 30+ FPS
+    int renderDistance = 3;
     int chunksLoadedThisFrame = 0;
-    const int maxChunksLoadPerFrame = 2; // Allow pre-loading a couple chunks per frame smoothly
+    const int maxChunksLoadPerFrame = 2;
 
     for (int x = -renderDistance; x <= renderDistance; ++x) {
         for (int z = -renderDistance; z <= renderDistance; ++z) {
@@ -113,6 +119,11 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
         std::lock_guard<std::mutex> lock(g_WorldLuaMutex);
         sol::protected_function genFunc = lua["generate_chunk"];
         if (genFunc.valid()) {
+            sol::protected_function setSeedFunc = lua["set_world_seed"];
+            if (setSeedFunc.valid()) {
+                setSeedFunc(g_WorldSeed);
+            }
+
             sol::protected_function_result result = genFunc(chunk.get(), chunkX, chunkZ);
             if (!result.valid()) {
                 sol::error err = result;
@@ -123,31 +134,45 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
             if (stoneId == 0) stoneId = 2;
             uint8_t grassId = BlockRegistry::getInstance().getBlockId("grass");
             if (grassId == 0) grassId = 3;
+            uint8_t dirtId = BlockRegistry::getInstance().getBlockId("dirt");
+            if (dirtId == 0) dirtId = 1;
 
             for (int x = 0; x < CHUNK_WIDTH; ++x) {
                 for (int z = 0; z < CHUNK_WIDTH; ++z) {
+                    int worldX = (chunkX * CHUNK_WIDTH) + x;
+                    int worldZ = (chunkZ * CHUNK_WIDTH) + z;
+
+                    float hVal = std::sin(worldX * 0.1f + g_WorldSeed) * std::cos(worldZ * 0.1f + g_WorldSeed) * 5.0f;
+                    int surfaceHeight = 55 + static_cast<int>(hVal);
+
                     for (int y = 0; y < CHUNK_HEIGHT; ++y) {
-                        if (y < 60) chunk->setBlock(x, y, z, stoneId);
-                        else if (y == 60) chunk->setBlock(x, y, z, grassId);
+                        if (y <= surfaceHeight) {
+                            if (CaveGenerator::isCarvedOut(worldX, y, worldZ)) {
+                                chunk->setBlock(x, y, z, 0);
+                            } else if (y == surfaceHeight) {
+                                chunk->setBlock(x, y, z, grassId);
+                            } else if (y > surfaceHeight - 4) {
+                                chunk->setBlock(x, y, z, (dirtId != 0 ? dirtId : stoneId));
+                            } else {
+                                chunk->setBlock(x, y, z, stoneId);
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // Register chunk immediately so it exists in map
     chunks[{chunkX, chunkZ}] = chunk;
 
-    // Offload CPU mesh generation completely to a background thread
     std::async(std::launch::async, [chunk]() {
         chunk->generateMeshData();
     });
 }
 
 void World::render(GLuint shaderProgram) const {
-    // Time-budgeted GPU upload pipeline (max 2.0ms per frame to maintain stable 30+ FPS)
     auto startTime = std::chrono::high_resolution_clock::now();
-    const double maxUploadTimeMs = 2.0; 
+    const double maxUploadTimeMs = 5.0;
 
     auto& mutableChunks = const_cast<std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash>&>(chunks);
 
@@ -188,8 +213,6 @@ uint8_t World::getBlockAt(int x, int y, int z) const {
 
     auto it = mutableChunks.find({cx, cz});
     if (it == mutableChunks.end()) {
-        // Return 0 (Air) immediately without blocking the main thread. 
-        // World::update will queue and load this chunk smoothly on background threads.
         return 0;
     }
 
