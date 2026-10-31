@@ -9,10 +9,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#ifndef GL_TEXTURE_SWIZZLE_RGBA
-#define GL_TEXTURE_SWIZZLE_RGBA 0x8E46
-#endif
-
 FontRenderer::FontRenderer() {}
 
 FontRenderer::~FontRenderer() {
@@ -47,9 +43,6 @@ bool FontRenderer::init(const std::string& fontPath) {
     glBindTexture(GL_TEXTURE_2D, fontTextureID);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, bitmapWidth, bitmapHeight, 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.data());
     
-    GLint swizzleMask[] = { GL_ONE, GL_ONE, GL_ONE, GL_RED };
-    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzleMask);
-
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
