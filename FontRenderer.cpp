@@ -68,11 +68,11 @@ void FontRenderer::renderText(GLuint fontShader, const std::string& text, float 
     float charHeight = scaleY;
 
     for (size_t i = 0; i < text.length(); ++i) {
-        char c = text[i];
-        if (c < 32 || c >= 128) continue;
+        int charIndex = text[i];
+        if (charIndex < 32 || charIndex >= 128) continue;
 
         stbtt_aligned_quad q;
-        stbtt_GetBakedQuad(cdata, 512, 512, c - 32, &rx, &ry, &q, 1);
+        stbtt_GetBakedQuad(cdata, 512, 512, charIndex - 32, &rx, &ry, &q, 1);
 
         float x0 = x + (i * charWidth);
         float x1 = x0 + charWidth;
