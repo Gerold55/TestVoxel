@@ -12,6 +12,11 @@ find_package(sol2 CONFIG REQUIRED)
 find_package(unofficial-lua CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
+add_library(stb IMPORTED INTERFACE)
+add_library(unofficial::stb ALIAS stb)
+
+target_include_directories(stb INTERFACE "${CMAKE_CURRENT_LIST_DIR}/libs")
+
 add_executable(VoxelEngine 
     main.cpp 
     Player.cpp
@@ -46,4 +51,5 @@ target_link_libraries(VoxelEngine PRIVATE
     unofficial::lua::lua
     nlohmann_json::nlohmann_json
     opengl32
+    unofficial::stb
 )
