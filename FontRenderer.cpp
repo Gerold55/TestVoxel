@@ -6,6 +6,9 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 #ifndef GL_TEXTURE_SWIZZLE_RGBA
 #define GL_TEXTURE_SWIZZLE_RGBA 0x8E46
 #endif
@@ -59,14 +62,28 @@ bool FontRenderer::init(const std::string& fontPath) {
 
 void FontRenderer::renderText(GLuint fontShader, const std::string& text,
         float x, float y, float scaleX, float scaleY, glm::vec4 color,
-        Dimensions2D windowSize) {
+        Dimensions2D resolution) {
     if (text.empty() || fontTextureID == 0) return;
 
+    // The vertices are flattened quads, in the following format:
+    // { x, y, tx, ty, ...}
+    std::vector<float> vertices = this->generateFontVertices(x, y, scaleX,
+            scaleY, resolution, text);
+
+    if (vertices.empty()) return;
+
+    this->drawGLFontQuads(fontShader, color, resolution, vertices);
+}
+
+std::vector<float> FontRenderer::generateFontVertices(float x, float y,
+        float scaleX, float scaleY, Dimensions2D resolution,
+        std::string_view text) const
+{
     std::vector<float> vertices;
     float rx = 0.0f;
     float ry = 0.0f;
 
-    float aspect = static_cast<float>(windowSize.width) / static_cast<float>(windowSize.height);
+    float aspect = static_cast<float>(resolution.width) / static_cast<float>(resolution.height);
     float charWidth = scaleX / aspect;
     float charHeight = scaleY;
 
@@ -94,8 +111,12 @@ void FontRenderer::renderText(GLuint fontShader, const std::string& text,
         vertices.insert(vertices.end(), std::begin(quad), std::end(quad));
     }
 
-    if (vertices.empty()) return;
+    return vertices;
+}
 
+void FontRenderer::drawGLFontQuads(GLuint fontShader, glm::vec4 color,
+        Dimensions2D resolution, const std::vector<float>& vertices)
+{
     glDisable(GL_DEPTH_TEST);
     glUseProgram(fontShader);
 
@@ -103,6 +124,12 @@ void FontRenderer::renderText(GLuint fontShader, const std::string& text,
     glBindTexture(GL_TEXTURE_2D, fontTextureID);
     glUniform1i(glGetUniformLocation(fontShader, "fontTexture"), 0);
     glUniform4f(glGetUniformLocation(fontShader, "textColor"), color.r, color.g, color.b, color.a);
+
+    glm::mat4 projection = glm::ortho(0.0f,
+            static_cast<float>(resolution.width),
+            static_cast<float>(resolution.height), 0.0f);
+    glUniformMatrix4fv(glGetUniformLocation(fontShader, "projection"), 1,
+            GL_FALSE, glm::value_ptr(projection));
 
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
