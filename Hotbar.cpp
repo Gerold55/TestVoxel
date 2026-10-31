@@ -298,15 +298,15 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
 
             glm::vec3 tint = blockProp.defaultTint;
 
-            // Correct V mapping for GUI UI: 0.0 at top (qY1), 1.0 at bottom (qY0)
+            // Pixel space: qY0 = top of icon, qY1 = bottom. Texture V = 0 at top.
             float plantVerts[78] = {
-                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
-                qX1, qY1, -5.0f, tint.r, tint.g, tint.b,  1.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
-                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY1, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
 
-                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
-                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
-                qX0, qY0, -5.0f, tint.r, tint.g, tint.b,  0.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f
+                qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX1, qY0, -5.0f, tint.r, tint.g, tint.b,  1.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
+                qX0, qY0, -5.0f, tint.r, tint.g, tint.b,  0.0f, 0.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f
             };
 
             for (float f : plantVerts) {
