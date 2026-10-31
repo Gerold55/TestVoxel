@@ -904,10 +904,12 @@ int main() {
 
         engineTable["draw_text"] = [&](std::string text, float x, float y) {
             if (g_FontRenderer) {
+                Dimensions2D windowSize;
                 int fw, fh;
-                glfwGetFramebufferSize(window, &fw, &fh);
-                float aspect = static_cast<float>(fw) / static_cast<float>(fh);
-                g_FontRenderer->renderText(fontProgram, text, x, y, 0.05f, 0.05f, glm::vec4(1.0f), aspect);
+                glfwGetFramebufferSize(window, &windowSize.width,
+                         &windowSize.height);
+                g_FontRenderer->renderText(fontProgram, text, x, y, 0.05f,
+                        0.05f, glm::vec4(1.0f), windowSize);
             }
         };
 

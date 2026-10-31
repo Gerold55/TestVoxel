@@ -249,7 +249,10 @@ void MainMenu::render(GLuint uiShader, GLuint fontShader, FontRenderer& fontRend
             float titleScaleX = 0.060f;
             float titleScaleY = 0.080f;
             float titleWidth = titleText.length() * (titleScaleX / aspect);
-            fontRenderer.renderText(fontShader, titleText, -titleWidth / 2.0f, 0.35f, titleScaleX, titleScaleY, glm::vec4(1.0f, 0.84f, 0.0f, 1.0f), aspect);
+            fontRenderer.renderText(fontShader, titleText, -titleWidth / 2.0f,
+                    0.35f, titleScaleX, titleScaleY,
+                    glm::vec4(1.0f, 0.84f, 0.0f, 1.0f),
+                    Dimensions2D{windowWidth, windowHeight});
         }
     }
 
@@ -266,7 +269,9 @@ void MainMenu::render(GLuint uiShader, GLuint fontShader, FontRenderer& fontRend
             float textY = btn.y + (btn.h - textScaleY) / 2.0f;
 
             glm::vec4 textColor = btn.isHovered ? glm::vec4(1.0f, 1.0f, 1.0f, 1.0f) : glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
-            fontRenderer.renderText(fontShader, btn.label, textX, textY, textScaleX, textScaleY, textColor, aspect);
+            fontRenderer.renderText(fontShader, btn.label, textX, textY,
+                    textScaleX, textScaleY, textColor,
+                    Dimensions2D{windowWidth, windowHeight});
         }
     }
 

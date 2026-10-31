@@ -150,7 +150,9 @@ void PauseMenu::render(GLuint uiShader, GLuint fontShader, FontRenderer& fontRen
             glm::vec4 textColor = (el.type == "label") ? glm::vec4(1.0f, 0.84f, 0.0f, 1.0f) :
                                   (el.isHovered ? glm::vec4(1.0f, 1.0f, 1.0f, 1.0f) : glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
-            fontRenderer.renderText(fontShader, el.label, textX, textY, textScaleX, textScaleY, textColor, aspect);
+            fontRenderer.renderText(fontShader, el.label, textX, textY,
+                    textScaleX, textScaleY, textColor,
+                    Dimensions2D{screenWidth, screenHeight});
         }
     }
 
