@@ -9,8 +9,20 @@ set(CMAKE_C_STANDARD 11)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
-find_package(unofficial-lua CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(unofficial-lua CONFIG QUIET)
+
+# The unofficial-lua library is vcpkg-only, so fall back to official Lua
+# to support non-vcpkg platforms. The unofficial-lua target provides a
+# target, which is cleaner.
+if (NOT unofficial-lua_FOUND)
+    find_package(Lua QUIET)
+endif()
+
+if (NOT unofficial-lua_FOUND AND NOT Lua_FOUND)
+    message(FATAL_ERROR "Could not find unofficial-lua (VCPKG) or Lua library")
+endif()
+
 
 add_library(stb IMPORTED INTERFACE)
 add_library(unofficial::stb ALIAS stb)
@@ -48,8 +60,13 @@ target_link_libraries(VoxelEngine PRIVATE
     glfw
     glm::glm
     sol2::sol2
-    unofficial::lua::lua
     nlohmann_json::nlohmann_json
     opengl32
     unofficial::stb
 )
+
+if (TARGET unofficial::lua::lua)
+    target_link_libraries(VoxelEngine PRIVATE unofficial::lua::lua)
+else()
+    target_link_libraries(VoxelEngine PRIVATE ${LUA_LIBRARY})
+endif()
