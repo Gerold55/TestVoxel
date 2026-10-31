@@ -62,12 +62,12 @@ void ChatSystem::executeCommand(const std::string& cmd) {
 void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight) {
     if (!fontRenderer || fontShader == 0) return;
 
-    float aspect = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
-
     // If chat is open, render current input prompt at the bottom
     if (isOpen) {
         std::string displayLine = "> " + currentInput + "_";
-        fontRenderer->renderText(fontShader, displayLine, -0.95f, -0.85f, 0.05f, 0.05f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), aspect);
+        fontRenderer->renderText(fontShader, displayLine, -0.95f, -0.85f, 0.05f,
+               0.05f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+               Dimensions2D{screenWidth, screenHeight});
     }
 
     // Render message history
@@ -83,7 +83,9 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
     for (size_t i = startIdx; i < messageHistory.size(); ++i) {
         float yPos = startY - (lineCount * lineSpacing);
         float alpha = isOpen ? 1.0f : 0.75f;
-        fontRenderer->renderText(fontShader, messageHistory[i], -0.95f, yPos, 0.045f, 0.045f, glm::vec4(1.0f, 1.0f, 1.0f, alpha), aspect);
+        fontRenderer->renderText(fontShader, messageHistory[i], -0.95f, yPos,
+                0.045f, 0.045f, glm::vec4(1.0f, 1.0f, 1.0f, alpha),
+                Dimensions2D{screenWidth, screenHeight});
         lineCount++;
     }
 }

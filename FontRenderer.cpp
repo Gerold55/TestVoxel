@@ -57,13 +57,16 @@ bool FontRenderer::init(const std::string& fontPath) {
     return true;
 }
 
-void FontRenderer::renderText(GLuint fontShader, const std::string& text, float x, float y, float scaleX, float scaleY, glm::vec4 color, float aspect) {
+void FontRenderer::renderText(GLuint fontShader, const std::string& text,
+        float x, float y, float scaleX, float scaleY, glm::vec4 color,
+        Dimensions2D windowSize) {
     if (text.empty() || fontTextureID == 0) return;
 
     std::vector<float> vertices;
     float rx = 0.0f;
     float ry = 0.0f;
 
+    float aspect = static_cast<float>(windowSize.width) / static_cast<float>(windowSize.height);
     float charWidth = scaleX / aspect;
     float charHeight = scaleY;
 
