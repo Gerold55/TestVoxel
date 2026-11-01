@@ -33,6 +33,10 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+  constexpr Dimensions2D baseResolution{1920, 1080};
+}
+
 std::string g_CurrentModPath = "";
 std::string g_ActiveGameFolder = "craft_and_ruin";
 std::string g_ActiveWorldName = "world_alpha";
@@ -670,7 +674,7 @@ int main() {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
         g_Hotbar = new Hotbar();
-        g_FontRenderer = new FontRenderer();
+        g_FontRenderer = new FontRenderer(baseResolution);
         g_ChatSystem = new ChatSystem();
         g_LightingSystem = new LightingSystem();
         g_Skybox = new Skybox();
@@ -912,8 +916,8 @@ int main() {
                 int fw, fh;
                 glfwGetFramebufferSize(window, &windowSize.width,
                          &windowSize.height);
-                g_FontRenderer->renderText(fontProgram, text, x, y, 0.05f,
-                        0.05f, glm::vec4(1.0f), windowSize);
+                g_FontRenderer->renderText(fontProgram, text, x, y, 1.0f,
+                        1.0f, glm::vec4(1.0f), windowSize);
             }
         };
 
