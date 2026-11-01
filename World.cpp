@@ -188,14 +188,24 @@ void World::render(GLuint shaderProgram) const {
             }
         }
 
-        if (chunk->vertexCount > 0 && chunk->VAO != 0) {
+        if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
                 pair.first.first * CHUNK_WIDTH,
                 0.0f,
                 pair.first.second * CHUNK_WIDTH
             ));
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            chunk->draw();
+            chunk->drawOpaque();
+        }
+
+        if (chunk->transparentVertexCount > 0 && chunk->transparentVAO != 0) {
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
+                pair.first.first * CHUNK_WIDTH,
+                0.0f,
+                pair.first.second * CHUNK_WIDTH
+            ));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            chunk->drawTransparent();
         }
     }
 }

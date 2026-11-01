@@ -1177,34 +1177,8 @@ int main() {
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_Unlit"), 0);
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_IsGUI"), 0);
 
-                // --- PASS 1: OPAQUE TERRAIN ---
-                glDepthMask(GL_TRUE);
-                glEnable(GL_CULL_FACE);
-                glCullFace(GL_BACK);
-                for (auto& pair : world.chunks) {
-                    if (pair.second->opaqueVertexCount > 0 && pair.second->opaqueVAO != 0) {
-                        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-                            pair.first.first * CHUNK_WIDTH, 0.0f, pair.first.second * CHUNK_WIDTH
-                        ));
-                        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-                        pair.second->drawOpaque();
-                    }
-                }
-
-                // --- PASS 2: TRANSPARENT TERRAIN (Water, Leaves, Plants) ---
-                glDepthMask(GL_FALSE);
-                glDisable(GL_CULL_FACE); // Double-sided rendering for cross-planes and water
-                for (auto& pair : world.chunks) {
-                    if (pair.second->transparentVertexCount > 0 && pair.second->transparentVAO != 0) {
-                        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-                            pair.first.first * CHUNK_WIDTH, 0.0f, pair.first.second * CHUNK_WIDTH
-                        ));
-                        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-                        pair.second->drawTransparent();
-                    }
-                }
-                glEnable(GL_CULL_FACE);
-                glDepthMask(GL_TRUE);
+                // --- PASS 1: TERRAIN ---
+                g_WorldInstance->render(shaderProgram);
 
                 // --- RENDER 3D ANIMATED MODEL PASS ---
                 glUseProgram(modelShaderProgram);
