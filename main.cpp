@@ -185,7 +185,7 @@ int loadTextureToLayer(const std::string& path) {
     }
 
     int width, height, nrChannels;
-    stbi_set_flip_vertically_on_load(true);
+    stbi_set_flip_vertically_on_load(false);
     unsigned char* data = stbi_load(finalPath.c_str(), &width, &height, &nrChannels, 4);
     if (!data) return -1;
 
@@ -221,7 +221,7 @@ GLuint loadStandardTexture(const std::string& path) {
     if (!found) return 0;
 
     int width, height, nrChannels;
-    stbi_set_flip_vertically_on_load(true);
+    stbi_set_flip_vertically_on_load(false);
     unsigned char* data = stbi_load(finalPath.c_str(), &width, &height, &nrChannels, 4);
     if (!data) return 0;
 
