@@ -171,22 +171,11 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
 }
 
 void World::render(GLuint shaderProgram) const {
-    auto startTime = std::chrono::high_resolution_clock::now();
-    const double maxUploadTimeMs = 5.0;
+    this->upload();
 
     auto& mutableChunks = const_cast<std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash>&>(chunks);
-
     for (auto& pair : mutableChunks) {
         auto& chunk = pair.second;
-
-        if (chunk->meshReadyForUpload && chunk->isDirty) {
-            auto currentTime = std::chrono::high_resolution_clock::now();
-            double elapsedMs = std::chrono::duration<double, std::milli>(currentTime - startTime).count();
-
-            if (elapsedMs < maxUploadTimeMs) {
-                chunk->uploadMesh();
-            }
-        }
 
         if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
@@ -206,6 +195,23 @@ void World::render(GLuint shaderProgram) const {
             ));
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
             chunk->drawTransparent();
+        }
+    }
+}
+
+void World::upload() const
+{
+    auto startTime = std::chrono::high_resolution_clock::now();
+    constexpr double maxUploadTimeMs = 5.0;
+
+    for ([[maybe_unused]] const auto& [_, chunk] : this->chunks) {
+        if (chunk->meshReadyForUpload && chunk->isDirty) {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            double elapsedMs = std::chrono::duration<double, std::milli>(currentTime - startTime).count();
+
+            if (elapsedMs < maxUploadTimeMs) {
+                chunk->uploadMesh();
+            }
         }
     }
 }

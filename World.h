@@ -38,4 +38,7 @@ public:
     void loadChunk(int chunkX, int chunkZ, sol::state& lua);
 
     std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash> chunks;
+
+private:
+    void upload() const;
 };
