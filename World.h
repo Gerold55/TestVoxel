@@ -41,4 +41,6 @@ public:
 
 private:
     void upload() const;
+
+    void draw(GLuint shaderProgram) const;
 };

@@ -172,32 +172,9 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
 
 void World::render(GLuint shaderProgram) const {
     this->upload();
-
-    auto& mutableChunks = const_cast<std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash>&>(chunks);
-    for (auto& pair : mutableChunks) {
-        auto& chunk = pair.second;
-
-        if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-                pair.first.first * CHUNK_WIDTH,
-                0.0f,
-                pair.first.second * CHUNK_WIDTH
-            ));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            chunk->drawOpaque();
-        }
-
-        if (chunk->transparentVertexCount > 0 && chunk->transparentVAO != 0) {
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-                pair.first.first * CHUNK_WIDTH,
-                0.0f,
-                pair.first.second * CHUNK_WIDTH
-            ));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-            chunk->drawTransparent();
-        }
-    }
+    this->draw(shaderProgram);
 }
+
 
 void World::upload() const
 {
@@ -212,6 +189,32 @@ void World::upload() const
             if (elapsedMs < maxUploadTimeMs) {
                 chunk->uploadMesh();
             }
+        }
+    }
+}
+
+void World::draw(GLuint shaderProgram) const
+{
+    for (const auto& [loc, chunk] : this->chunks) {
+
+        if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
+                loc.first * CHUNK_WIDTH,
+                0.0f,
+                loc.second * CHUNK_WIDTH
+            ));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            chunk->drawOpaque();
+        }
+
+        if (chunk->transparentVertexCount > 0 && chunk->transparentVAO != 0) {
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
+                loc.first * CHUNK_WIDTH,
+                0.0f,
+                loc.second * CHUNK_WIDTH
+            ));
+            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            chunk->drawTransparent();
         }
     }
 }
