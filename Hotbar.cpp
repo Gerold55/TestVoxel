@@ -88,6 +88,9 @@ static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
 void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight) {
     if (!isCreativeOpen) return;
 
+    float actualSlotSize = slotSize <= 1.5f ? slotSize * screenHeight * 0.55f : slotSize;
+    if (actualSlotSize > 60.0f) actualSlotSize = 60.0f;
+
     float tabW = 100.0f;
     float tabH = 24.0f;
     float tabStartY = creativeY - tabH;
@@ -105,7 +108,7 @@ void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int
         
         float gridStartX = creativeX + 16.0f;
         float gridStartY = creativeY + 45.0f;
-        float itemBoxSize = 36.0f;
+        float itemBoxSize = actualSlotSize;
         float spacing = 6.0f;
         int cols = 9;
 
@@ -204,8 +207,12 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         int cols = 9;
         int rows = (filteredCount + cols - 1) / cols;
         if (rows < 3) rows = 3;
-        creativeW = 420.0f;
-        creativeH = static_cast<float>(60 + rows * 42);
+
+        float itemBoxSize = actualSlotSize;
+        float spacing = 6.0f;
+
+        creativeW = (cols * itemBoxSize) + ((cols + 1) * spacing) + 20.0f;
+        creativeH = 60.0f + (rows * (itemBoxSize + spacing));
         creativeX = std::round((screenWidth - creativeW) * 0.5f);
         creativeY = std::round((screenHeight - creativeH) * 0.5f);
 
@@ -224,8 +231,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
 
         float gridStartX = creativeX + 16.0f;
         float gridStartY = creativeY + 45.0f;
-        float itemBoxSize = 36.0f;
-        float spacing = 6.0f;
 
         int displayIndex = 0;
         for (int i = 1; i <= 255; ++i) {
@@ -298,7 +303,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
 
             glm::vec3 tint = blockProp.defaultTint;
 
-            // Pixel space: qY0 = top of icon, qY1 = bottom. Texture V = 0 at top.
             float plantVerts[78] = {
                 qX0, qY1, -5.0f, tint.r, tint.g, tint.b,  0.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
                 qX1, qY1, -5.0f, tint.r, tint.g, tint.b,  1.0f, 1.0f, (float)texLayer, overlayLayer, tintBase, tintOverlay, 1.0f,
@@ -320,11 +324,13 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         iconTransform = glm::scale(iconTransform, glm::vec3(scale));
 
         for (int face = 0; face < 6; ++face) {
-            int activeLayer = blockProp.faces[face].baseLayer;
-            if (face == 2 && blockProp.faces[3].baseLayer >= 0) activeLayer = blockProp.faces[3].baseLayer;
-            else if (face == 3 && blockProp.faces[2].baseLayer >= 0) activeLayer = blockProp.faces[2].baseLayer;
+            int targetFaceIdx = face;
+            if (face == 2 && blockProp.faces[3].baseLayer >= 0) targetFaceIdx = 3;
+            else if (face == 3 && blockProp.faces[2].baseLayer >= 0) targetFaceIdx = 2;
 
-            const FaceDefinition& faceDef = blockProp.faces[face];
+            const FaceDefinition& faceDef = blockProp.faces[targetFaceIdx];
+            int activeLayer = faceDef.baseLayer;
+
             int rawOverlay = faceDef.overlayLayer >= 0 ? faceDef.overlayLayer : -1;
             float overlayLayer = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
 
@@ -345,7 +351,7 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
                 iconVertices.push_back(tint.b);
 
                 iconVertices.push_back(texCoords[v * 2 + 0]);
-                iconVertices.push_back(1.0f - texCoords[v * 2 + 1]);
+                iconVertices.push_back(texCoords[v * 2 + 1]);
 
                 iconVertices.push_back(static_cast<float>(activeLayer));
                 iconVertices.push_back(overlayLayer);
@@ -365,7 +371,7 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
     if (isCreativeOpen) {
         float gridStartX = creativeX + 16.0f;
         float gridStartY = creativeY + 45.0f;
-        float itemBoxSize = 36.0f;
+        float itemBoxSize = actualSlotSize;
         float spacing = 6.0f;
         int cols = 9;
 
@@ -448,13 +454,13 @@ void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
         float y1 = 1.0f - (py / screenHeight) * 2.0f;
 
         float quadVerts[] = {
-            x0, y1,  0.0f, 0.0f,
-            x1, y1,  1.0f, 0.0f,
-            x1, y0,  1.0f, 1.0f,
+            x0, y1,  0.0f, 1.0f,
+            x1, y1,  1.0f, 1.0f,
+            x1, y0,  1.0f, 0.0f,
 
-            x0, y1,  0.0f, 0.0f,
-            x1, y0,  1.0f, 1.0f,
-            x0, y0,  0.0f, 1.0f
+            x0, y1,  0.0f, 1.0f,
+            x1, y0,  1.0f, 0.0f,
+            x0, y0,  0.0f, 0.0f
         };
 
         glBindVertexArray(texQuadVAO);
@@ -485,13 +491,13 @@ void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
         float y1 = 1.0f - ((sy - border) / screenHeight) * 2.0f;
 
         float highlightVerts[] = {
-            x0, y1,  0.0f, 0.0f,
-            x1, y1,  1.0f, 0.0f,
-            x1, y0,  1.0f, 1.0f,
+            x0, y1,  0.0f, 1.0f,
+            x1, y1,  1.0f, 1.0f,
+            x1, y0,  1.0f, 0.0f,
 
-            x0, y1,  0.0f, 0.0f,
-            x1, y0,  1.0f, 1.0f,
-            x0, y0,  0.0f, 1.0f
+            x0, y1,  0.0f, 1.0f,
+            x1, y0,  1.0f, 0.0f,
+            x0, y0,  0.0f, 0.0f
         };
 
         glBindVertexArray(texQuadVAO);

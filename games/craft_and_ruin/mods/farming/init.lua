@@ -11,7 +11,7 @@ engine.register_block("farmland_dry", 0.5, 0.4, 0.3, {
     transparent = false,
     walkable = true,
     pattern = "cube",
-    creative = true
+    in_creative = true
 })
 
 engine.register_block("farmland_wet", 0.35, 0.28, 0.18, {
@@ -22,29 +22,29 @@ engine.register_block("farmland_wet", 0.35, 0.28, 0.18, {
     transparent = false,
     walkable = true,
     pattern = "cube",
-    creative = true
+    in_creative = true
 })
 
 -- 2. Register Crops across Growth Stages (Hidden from Creative Inventory)
 engine.register_block("wheat_stage_0", 0.4, 0.8, 0.2, "cw_farming_wheat_1.png", nil, {
-    transparent = true, walkable = false, selectable = true, pattern = "plantlike", creative = false
+    transparent = true, walkable = false, selectable = true, pattern = "plantlike", in_creative = false
 })
 engine.register_block("wheat_stage_1", 0.5, 0.9, 0.2, "cw_farming_wheat_2.png", nil, {
-    transparent = true, walkable = false, selectable = true, pattern = "plantlike", creative = false
+    transparent = true, walkable = false, selectable = true, pattern = "plantlike", in_creative = false
 })
 engine.register_block("wheat_stage_2", 0.7, 0.95, 0.15, "cw_farming_wheat_3.png", nil, {
-    transparent = true, walkable = false, selectable = true, pattern = "plantlike", creative = false
+    transparent = true, walkable = false, selectable = true, pattern = "plantlike", in_creative = false
 })
 engine.register_block("wheat_ripe", 0.95, 0.9, 0.1, "cw_farming_wheat_4.png", nil, {
-    transparent = true, walkable = false, selectable = true, pattern = "plantlike", creative = false
+    transparent = true, walkable = false, selectable = true, pattern = "plantlike", in_creative = false
 })
 
 -- Register Seeds and Harvested Wheat Item (Visible in Creative)
 engine.register_block("wheat_seeds", 0.4, 0.8, 0.2, "wheat_seeds.png", nil, {
-    transparent = true, pattern = "plantlike", walkable = false, creative = true
+    transparent = true, pattern = "plantlike", walkable = false, in_creative = true
 })
 engine.register_block("wheat", 0.9, 0.8, 0.1, "wheat_item.png", nil, {
-    transparent = true, pattern = "plantlike", walkable = false, creative = true
+    transparent = true, pattern = "plantlike", walkable = false, in_creative = true
 })
 
 -- Register Scythe Tool (Visible in Creative)
