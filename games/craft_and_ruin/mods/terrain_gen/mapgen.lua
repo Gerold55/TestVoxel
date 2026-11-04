@@ -1,4 +1,4 @@
--- mapgen.lua - Balanced Biomes, Dense Short Grass, Sparse Reeds, & Sparse Cacti
+-- mapgen.lua - Minecraft-Style Biomes with Smooth Blending
 
 local world_seed = 1337
 
@@ -9,65 +9,122 @@ function set_world_seed(seed)
     if seed then world_seed = seed end
 end
 
+-- Hash function for pseudo-random values at integer coordinates
 function get_rand(x, z, seed_offset)
     local val = math.sin((x + world_seed * 0.1) * 12.9898 + (z + world_seed * 0.1) * 78.233 + seed_offset) * 43758.5453
     return val - math.floor(val)
 end
 
-function get_biome_parameters(world_x, world_z)
-    local continent_scale = 0.00025  
-    local biome_scale = 0.0006      
-    local river_scale = 0.002       
-
-    local ox = world_x + (world_seed % 1000)
-    local oz = world_z + (world_seed % 1000)
-
-    local continentalness = math.sin(ox * continent_scale) * math.cos(oz * continent_scale * 0.7) 
-        + (math.sin(ox * continent_scale * 2.1) * math.cos(oz * continent_scale * 2.1)) * 0.25
-    continentalness = continentalness / 1.25
-
-    local temperature = math.sin(ox * biome_scale) * math.cos(oz * biome_scale * 0.8) * 0.5 + 0.5
-    local river_noise = math.abs(math.sin(ox * river_scale) * math.cos(oz * river_scale * 1.1))
-
-    return continentalness, temperature, river_noise
+-- Smooth Interpolation Helpers
+local function fade(t)
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 end
 
-function get_terrain_height(world_x, world_z, continentalness, temperature, river_val)
-    local scale_hills = 0.005
-    local scale_detail = 0.02
+local function lerp(t, a, b)
+    return a + t * (b - a)
+end
 
-    local ox = world_x + (world_seed % 1000)
-    local oz = world_z + (world_seed % 1000)
+local function smooth_noise2d(x, z, seed_offset)
+    local X = math.floor(x)
+    local Z = math.floor(z)
+    local fx = x - X
+    local fz = z - Z
 
-    local h1 = math.sin(ox * scale_hills) * math.cos(oz * scale_hills) * 16.0
-    local h2 = math.sin(ox * scale_detail + 1.2) * math.sin(oz * scale_detail + 0.8) * 3.0
-    
+    local u = fade(fx)
+    local v = fade(fz)
+
+    local n00 = get_rand(X, Z, seed_offset)
+    local n10 = get_rand(X + 1, Z, seed_offset)
+    local n01 = get_rand(X, Z + 1, seed_offset)
+    local n11 = get_rand(X + 1, Z + 1, seed_offset)
+
+    local nx0 = lerp(u, n00, n10)
+    local nx1 = lerp(u, n01, n11)
+
+    return lerp(v, nx0, nx1)
+end
+
+-- Octave noise for continuous terrain shapes
+local function octave_noise2d(x, z, octaves, persistence, scale, seed_offset)
+    local total = 0
+    local frequency = scale
+    local amplitude = 1
+    local maxValue = 0
+    for i = 1, octaves do
+        total = total + smooth_noise2d(x * frequency, z * frequency, seed_offset + i * 1.5) * amplitude
+        maxValue = maxValue + amplitude
+        amplitude = amplitude * persistence
+        frequency = frequency * 2
+    end
+    return total / maxValue
+end
+
+function get_biome_parameters(world_x, world_z)
+    local continent_scale = 0.001
+    local biome_scale     = 0.002
+    local river_scale     = 0.006
+
+    local wx = world_x + (world_seed % 1000)
+    local wz = world_z + (world_seed % 1000)
+
+    local continentalness = octave_noise2d(wx, wz, 3, 0.5, continent_scale, 1.0) * 2.0 - 1.0
+    local temperature     = octave_noise2d(wx, wz, 3, 0.5, biome_scale, 2.0)
+    local humidity        = octave_noise2d(wx, wz, 3, 0.5, biome_scale, 4.0)
+    local river_noise     = math.abs(octave_noise2d(wx, wz, 2, 0.5, river_scale, 3.0) * 2.0 - 1.0)
+
+    return continentalness, temperature, humidity, river_noise
+end
+
+function get_terrain_height(world_x, world_z, continentalness, temperature, humidity, river_val)
+    local wx = world_x + (world_seed % 1000)
+    local wz = world_z + (world_seed % 1000)
+
     local sea_level = 62.0
-    local base_height = sea_level + (continentalness * 35.0)
+    
+    -- Base inland height
+    local base_height = sea_level + (continentalness * 28.0)
 
-    local temp_factor = math.max(0.0, math.min(1.0, (temperature - 0.58) / 0.15))
-    if temp_factor > 0.0 then
-        h1 = h1 * (1.0 - (0.5 * temp_factor))
-        h2 = h2 * (1.0 - (0.3 * temp_factor))
+    -- Continuous detail noise
+    local h1 = (octave_noise2d(wx, wz, 4, 0.5, 0.008, 5.0) * 2.0 - 1.0) * 14.0
+    local h2 = (octave_noise2d(wx, wz, 2, 0.5, 0.03, 6.0) * 2.0 - 1.0) * 3.0
+
+    -- Smooth swamp terrain blending factor (Warm + High Humidity + Low Inland Height)
+    local swamp_factor = math.max(0.0, math.min(1.0, (humidity - 0.55) / 0.15)) *
+                         math.max(0.0, math.min(1.0, (temperature - 0.35) / 0.15))
+
+    -- Smoothly flatten swamp areas toward water level without step cuts
+    if swamp_factor > 0.0 then
+        h1 = lerp(swamp_factor, h1, h1 * 0.15)
+        h2 = lerp(swamp_factor, h2, h2 * 0.2)
+        base_height = lerp(swamp_factor, base_height, sea_level - 0.5)
     end
 
     local height = base_height + h1 + h2
 
-    if continentalness < -0.15 then
-        local depth_factor = (-0.15 - continentalness)
-        local ocean_depth = (depth_factor * depth_factor * 120.0) + (depth_factor * 25.0)
+    -- Oceans
+    if continentalness < -0.2 then
+        local depth_factor = (-0.2 - continentalness)
+        local ocean_depth = (depth_factor * depth_factor * 70.0) + (depth_factor * 15.0)
         height = height - ocean_depth
     end
 
+    -- Rivers
     if continentalness > -0.05 and river_val < 0.05 then
         local river_depth_factor = (0.05 - river_val) / 0.05
-        height = height - (river_depth_factor * 9.0)
+        height = height - (river_depth_factor * 7.0)
         if height < sea_level - 3.0 then
             height = sea_level - 3.0
         end
     end
 
     return math.floor(height)
+end
+
+-- World water check helper
+local function is_world_water(world_x, world_z)
+    local c, t, h, r = get_biome_parameters(world_x, world_z)
+    local height = get_terrain_height(world_x, world_z, c, t, h, r)
+    return height < 62.0
 end
 
 function is_cave(world_x, world_y, world_z)
@@ -116,6 +173,36 @@ function generate_oak_tree(chunk, x, y, z)
     if top_crown_y < 256 and x >= 0 and x < 16 and z >= 0 and z < 16 then
         if chunk:get_block(x, top_crown_y, z) == 0 then
             chunk:set_block(x, top_crown_y, z, leaves_id)
+        end
+    end
+end
+
+function generate_swamp_tree(chunk, x, y, z)
+    local wood_id = engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak") or 5
+    local leaves_id = engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak") or 6
+
+    local trunk_height = 5 + math.floor(get_rand(x, z, 3.1) * 2)
+    for h = 0, trunk_height - 1 do
+        local ty = y + h
+        if ty < 256 then chunk:set_block(x, ty, z, wood_id) end
+    end
+
+    local leaf_start = y + trunk_height - 3
+    for ly = 0, 3 do
+        local current_y = leaf_start + ly
+        local radius = (ly == 0 or ly == 3) and 2 or 3
+
+        for lx = -radius, radius do
+            for lz = -radius, radius do
+                if not (math.abs(lx) == radius and math.abs(lz) == radius) then
+                    local bx, by, bz = x + lx, current_y, z + lz
+                    if bx >= 0 and bx < 16 and by >= 0 and by < 256 and bz >= 0 and bz < 16 then
+                        if chunk:get_block(bx, by, bz) == 0 then
+                            chunk:set_block(bx, by, bz, leaves_id)
+                        end
+                    end
+                end
+            end
         end
     end
 end
@@ -195,25 +282,27 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     local gravel_id = engine.get_block_id("gravel") ~= 0 and engine.get_block_id("gravel") or 13
     local water_id = engine.get_block_id("water") ~= 0 and engine.get_block_id("water") or 9
 
+    local mushroom_red_id = engine.get_block_id("mushroom_red") ~= 0 and engine.get_block_id("mushroom_red") or engine.get_block_id("flower_poppy")
+    local mushroom_brown_id = engine.get_block_id("mushroom_brown") ~= 0 and engine.get_block_id("mushroom_brown") or engine.get_block_id("flower_daisy")
+    local blue_orchid_id = engine.get_block_id("flower_bluebell")
+
     local short_grass_id = engine.get_block_id("short_grass")
     local sea_level = 62.0
 
     local heights = {}
     local water_mask = {}
-    local desert_mask = {}
 
     for lx = 0, 15 do
         heights[lx] = {}
         water_mask[lx] = {}
-        desert_mask[lx] = {}
         for lz = 0, 15 do
             local world_x = chunk_x * 16 + lx
             local world_z = chunk_z * 16 + lz
-            local continentalness, temp, river_val = get_biome_parameters(world_x, world_z)
-            local surface_y = get_terrain_height(world_x, world_z, continentalness, temp, river_val)
+            local c, temp, hum, river_val = get_biome_parameters(world_x, world_z)
+            local surface_y = get_terrain_height(world_x, world_z, c, temp, hum, river_val)
+            
             heights[lx][lz] = surface_y
             water_mask[lx][lz] = (surface_y < sea_level)
-            desert_mask[lx][lz] = (temp > 0.65)
         end
     end
 
@@ -222,24 +311,38 @@ function generate_chunk(chunk, chunk_x, chunk_z)
             local world_x = chunk_x * 16 + lx
             local world_z = chunk_z * 16 + lz
             
+            local c, temp, hum, river_val = get_biome_parameters(world_x, world_z)
             local surface_y = heights[lx][lz]
-            local is_desert = desert_mask[lx][lz]
             local is_water_body = water_mask[lx][lz]
+
+            -- Continuous Minecraft Biome Classification
+            local is_desert = (temp > 0.68 and hum < 0.35)
+            local is_swamp = (hum > 0.55 and temp >= 0.35 and c > -0.25)
 
             local top_block = is_desert and sand_id or grass_id
             local sub_block = is_desert and sand_id or dirt_id
 
+            if is_swamp then
+                top_block = (surface_y < sea_level) and dirt_id or grass_id
+                sub_block = dirt_id
+            end
+
             if is_water_body then
                 local bed_rand = get_rand(world_x, world_z, 5.5)
-                if bed_rand < 0.6 then
-                    top_block = sand_id
-                    sub_block = sand_id
-                elseif bed_rand < 0.85 then
-                    top_block = gravel_id
+                if is_swamp then
+                    top_block = (bed_rand < 0.80) and dirt_id or gravel_id
                     sub_block = dirt_id
                 else
-                    top_block = dirt_id
-                    sub_block = dirt_id
+                    if bed_rand < 0.6 then
+                        top_block = sand_id
+                        sub_block = sand_id
+                    elseif bed_rand < 0.85 then
+                        top_block = gravel_id
+                        sub_block = dirt_id
+                    else
+                        top_block = dirt_id
+                        sub_block = dirt_id
+                    end
                 end
             end
 
@@ -267,11 +370,59 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 end
             end
 
-            -- --- SURFACE FLORA & FEATURES (Safe from chunk boundary cuts with margin [1 to 14]) ---
+            -- --- SURFACE FLORA ---
             if not is_water_body and surface_y >= math.floor(sea_level) and lx >= 1 and lx <= 14 and lz >= 1 and lz <= 14 then
                 local flora_rand = get_rand(world_x, world_z, 1.1)
 
-                if not is_desert and top_block ~= sand_id then
+                if is_swamp then
+                    if flora_rand < 0.22 and surface_y + 1 < 256 then
+                        local type_rand = get_rand(world_x, world_z, 2.2)
+                        local selected_id = short_grass_id
+
+                        if type_rand < 0.12 and blue_orchid_id ~= 0 then
+                            selected_id = blue_orchid_id
+                        elseif type_rand < 0.20 then
+                            selected_id = mushroom_brown_id
+                        elseif type_rand < 0.28 then
+                            selected_id = mushroom_red_id
+                        end
+
+                        if selected_id ~= 0 then
+                            chunk:set_block(lx, surface_y + 1, lz, selected_id)
+                        end
+                    end
+
+                    -- Shoreline Reeds Check
+                    if surface_y == math.floor(sea_level) then
+                        local is_near_water = false
+                        local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
+                        
+                        for _, offset in ipairs(neighbor_offsets) do
+                            local n_wx = world_x + offset[1]
+                            local n_wz = world_z + offset[2]
+                            if is_world_water(n_wx, n_wz) then
+                                is_near_water = true
+                                break
+                            end
+                        end
+
+                        if is_near_water then
+                            local reed_rand = get_rand(world_x, world_z, 8.8)
+                            if reed_rand < 0.15 and surface_y + 4 < 256 then
+                                generate_reeds(chunk, lx, surface_y + 1, lz)
+                            end
+                        end
+                    end
+
+                    -- Swamp Oak Trees
+                    if lx >= 2 and lx <= 13 and lz >= 2 and lz <= 13 then
+                        local tree_rand = get_rand(world_x, world_z, 3.3)
+                        if tree_rand < 0.018 and surface_y + 8 < 256 then
+                            generate_swamp_tree(chunk, lx, surface_y + 1, lz)
+                        end
+                    end
+
+                elseif not is_desert and top_block ~= sand_id then
                     if flora_rand < 0.22 and surface_y + 1 < 256 then
                         local type_rand = get_rand(world_x, world_z, 2.2)
                         local selected_id = short_grass_id
@@ -291,19 +442,16 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         end
                     end
 
-                    -- Shoreline Reeds Check (Sparse Minecraft-style)
                     if surface_y == math.floor(sea_level) then
                         local is_near_water = false
                         local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
                         
                         for _, offset in ipairs(neighbor_offsets) do
-                            local nx = lx + offset[1]
-                            local nz = lz + offset[2]
-                            if nx >= 0 and nx < 16 and nz >= 0 and nz < 16 then
-                                if water_mask[nx][nz] then
-                                    is_near_water = true
-                                    break
-                                end
+                            local n_wx = world_x + offset[1]
+                            local n_wz = world_z + offset[2]
+                            if is_world_water(n_wx, n_wz) then
+                                is_near_water = true
+                                break
                             end
                         end
 
@@ -315,7 +463,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         end
                     end
 
-                    -- Trees (Restricted to inner chunk boundary [2 to 13])
                     if lx >= 2 and lx <= 13 and lz >= 2 and lz <= 13 then
                         local tree_rand = get_rand(world_x, world_z, 3.3)
                         if tree_rand < 0.012 and surface_y + 9 < 256 then
@@ -328,7 +475,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         end
                     end
                 elseif is_desert then
-                    -- Sparse cacti (1 to 3 blocks tall, rare frequency)
                     if flora_rand < 0.003 and surface_y + 4 < 256 then
                         generate_cactus(chunk, lx, surface_y + 1, lz)
                     end
@@ -338,4 +484,4 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     end
 end
 
-print("[Mapgen] Loaded Complete Polished Mapgen successfully.")
+print("[Mapgen] Loaded Minecraft-Style Blended Biomes successfully.")

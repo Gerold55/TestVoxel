@@ -89,14 +89,13 @@ void ChunkMesh::generateMeshData() {
 
                 const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
 
-                // --- 1. PLANTLIKE (Cross-planes with safe overlay check) ---
+                // --- 1. PLANTLIKE (Cross-planes with double-sided rendering) ---
                 if (prop.pattern == "plantlike") {
                     float r = prop.defaultTint.r;
                     float g = prop.defaultTint.g;
                     float b = prop.defaultTint.b;
                     
                     int baseTex = prop.faces[0].baseLayer >= 0 ? prop.faces[0].baseLayer : prop.faces[2].baseLayer;
-                    // Force overlay to -1.0f unless explicitly valid >= 0
                     int rawOverlay = prop.faces[0].overlayLayer >= 0 ? prop.faces[0].overlayLayer : -1;
                     float overlayTex = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
                     
@@ -111,16 +110,19 @@ void ChunkMesh::generateMeshData() {
                     float maxY = (float)y + 1.0f;
                     float faceShading = 1.0f;
 
+                    // Plane 1 Vertices (Diagonal 1)
                     Vertex p1_v0 = { minX, minY, minZ, r, g, b, 0.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v1 = { maxX, minY, maxZ, r, g, b, 1.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v2 = { maxX, maxY, maxZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v3 = { minX, maxY, minZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
+                    // Plane 2 Vertices (Diagonal 2 - Corrected p2_v3 Z position)
                     Vertex p2_v0 = { minX, minY, maxZ, r, g, b, 0.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v1 = { maxX, minY, minZ, r, g, b, 1.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v2 = { maxX, maxY, minZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v3 = { minX, maxY, maxZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
+                    // --- Plane 1 (Front Face) ---
                     cpuOpaqueVertices.push_back(p1_v0);
                     cpuOpaqueVertices.push_back(p1_v1);
                     cpuOpaqueVertices.push_back(p1_v2);
@@ -128,12 +130,29 @@ void ChunkMesh::generateMeshData() {
                     cpuOpaqueVertices.push_back(p1_v2);
                     cpuOpaqueVertices.push_back(p1_v3);
 
+                    // --- Plane 1 (Back Face - Reverse Winding) ---
+                    cpuOpaqueVertices.push_back(p1_v0);
+                    cpuOpaqueVertices.push_back(p1_v2);
+                    cpuOpaqueVertices.push_back(p1_v1);
+                    cpuOpaqueVertices.push_back(p1_v0);
+                    cpuOpaqueVertices.push_back(p1_v3);
+                    cpuOpaqueVertices.push_back(p1_v2);
+
+                    // --- Plane 2 (Front Face) ---
                     cpuOpaqueVertices.push_back(p2_v0);
                     cpuOpaqueVertices.push_back(p2_v1);
                     cpuOpaqueVertices.push_back(p2_v2);
                     cpuOpaqueVertices.push_back(p2_v0);
                     cpuOpaqueVertices.push_back(p2_v2);
                     cpuOpaqueVertices.push_back(p2_v3);
+
+                    // --- Plane 2 (Back Face - Reverse Winding) ---
+                    cpuOpaqueVertices.push_back(p2_v0);
+                    cpuOpaqueVertices.push_back(p2_v2);
+                    cpuOpaqueVertices.push_back(p2_v1);
+                    cpuOpaqueVertices.push_back(p2_v0);
+                    cpuOpaqueVertices.push_back(p2_v3);
+                    cpuOpaqueVertices.push_back(p2_v2);
 
                     continue;
                 }
@@ -201,13 +220,13 @@ void ChunkMesh::generateMeshData() {
 
                         float fv[4][3];
                         if (f == 0) {
-                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                    fv[0][2] = fz + 1.0f;
-                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                    fv[1][2] = fz;
+                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                     fv[0][2] = fz + 1.0f;
+                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                     fv[1][2] = fz;
                             fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[2][2] = fz;
                             fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
                         } else if (f == 1) {
-                            fv[0][0] = fx;        fv[0][1] = fy;                    fv[0][2] = fz;
-                            fv[1][0] = fx;        fv[1][1] = fy;                    fv[1][2] = fz + 1.0f;
+                            fv[0][0] = fx;        fv[0][1] = fy;                     fv[0][2] = fz;
+                            fv[1][0] = fx;        fv[1][1] = fy;                     fv[1][2] = fz + 1.0f;
                             fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
                             fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[3][2] = fz;
                         } else if (f == 2) { // Top Face
@@ -221,13 +240,13 @@ void ChunkMesh::generateMeshData() {
                             fv[2][0] = fx + 1.0f; fv[2][1] = fy;        fv[2][2] = fz + 1.0f;
                             fv[3][0] = fx;        fv[3][1] = fy;        fv[3][2] = fz + 1.0f;
                         } else if (f == 4) { // North Face
-                            fv[0][0] = fx;        fv[0][1] = fy;                    fv[0][2] = fz + 1.0f;
-                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                    fv[1][2] = fz + 1.0f;
+                            fv[0][0] = fx;        fv[0][1] = fy;                     fv[0][2] = fz + 1.0f;
+                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                     fv[1][2] = fz + 1.0f;
                             fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
                             fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
                         } else { // South Face
-                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                    fv[0][2] = fz;
-                            fv[1][0] = fx;        fv[1][1] = fy;                    fv[1][2] = fz;
+                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                     fv[0][2] = fz;
+                            fv[1][0] = fx;        fv[1][1] = fy;                     fv[1][2] = fz;
                             fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz;
                             fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz;
                         }
@@ -311,7 +330,7 @@ void ChunkMesh::drawOpaque() const {
 }
 
 void ChunkMesh::drawTransparent() const {
-    if (transparentVertexCount == 0 || transparentVAO ==0) return;
+    if (transparentVertexCount == 0 || transparentVAO == 0) return;
     glBindVertexArray(transparentVAO);
     glDrawArrays(GL_TRIANGLES, 0, transparentVertexCount);
     glBindVertexArray(0);
