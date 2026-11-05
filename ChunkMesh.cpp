@@ -88,8 +88,12 @@ void ChunkMesh::generateMeshData() {
                 if (blockId == 0) continue;
 
                 const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
+                uint8_t meta = metadata[x][y][z];
 
-                // --- 1. PLANTLIKE (Cross-planes with double-sided rendering) ---
+                // Check waterlogged status using metadata flag (bit 0 / meta == 1)
+                bool isWaterlogged = (meta & 1) != 0;
+
+                // --- 1. PLANTLIKE (Cross-planes rendering) ---
                 if (prop.pattern == "plantlike") {
                     float r = prop.defaultTint.r;
                     float g = prop.defaultTint.g;
@@ -116,51 +120,39 @@ void ChunkMesh::generateMeshData() {
                     Vertex p1_v2 = { maxX, maxY, maxZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v3 = { minX, maxY, minZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
-                    // Plane 2 Vertices (Diagonal 2 - Corrected p2_v3 Z position)
+                    // Plane 2 Vertices (Diagonal 2)
                     Vertex p2_v0 = { minX, minY, maxZ, r, g, b, 0.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v1 = { maxX, minY, minZ, r, g, b, 1.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v2 = { maxX, maxY, minZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v3 = { minX, maxY, maxZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
-                    // --- Plane 1 (Front Face) ---
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v1);
-                    cpuOpaqueVertices.push_back(p1_v2);
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v2);
-                    cpuOpaqueVertices.push_back(p1_v3);
+                    // Route transparent plants using pointer
+                    std::vector<Vertex>* plantBuffer = prop.isTransparent ? &cpuTransparentVertices : &cpuOpaqueVertices;
 
-                    // --- Plane 1 (Back Face - Reverse Winding) ---
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v2);
-                    cpuOpaqueVertices.push_back(p1_v1);
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v3);
-                    cpuOpaqueVertices.push_back(p1_v2);
+                    // Front & Back Faces (Plane 1)
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v1); plantBuffer->push_back(p1_v2);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v2); plantBuffer->push_back(p1_v3);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v2); plantBuffer->push_back(p1_v1);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v3); plantBuffer->push_back(p1_v2);
 
-                    // --- Plane 2 (Front Face) ---
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v1);
-                    cpuOpaqueVertices.push_back(p2_v2);
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v2);
-                    cpuOpaqueVertices.push_back(p2_v3);
+                    // Front & Back Faces (Plane 2)
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v1); plantBuffer->push_back(p2_v2);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v2); plantBuffer->push_back(p2_v3);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v2); plantBuffer->push_back(p2_v1);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v3); plantBuffer->push_back(p2_v2);
 
-                    // --- Plane 2 (Back Face - Reverse Winding) ---
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v2);
-                    cpuOpaqueVertices.push_back(p2_v1);
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v3);
-                    cpuOpaqueVertices.push_back(p2_v2);
-
-                    continue;
+                    // If not waterlogged, finish plant processing. If waterlogged, fall through to generate surrounding water faces!
+                    if (!isWaterlogged) continue;
                 }
 
-                // --- 2. STANDARD CUBE RENDERING ---
-                float r = prop.defaultTint.r;
-                float g = prop.defaultTint.g;
-                float b = prop.defaultTint.b;
+                // --- 2. STANDARD CUBE / WATERLOGGED WATER RENDERING ---
+                // If block is waterlogged, use water properties for the surrounding box
+                uint8_t waterId = BlockRegistry::getInstance().getBlockId("water");
+                const auto& renderProp = (isWaterlogged && waterId != 0) ? BlockRegistry::getInstance().getBlock(waterId) : prop;
+
+                float r = renderProp.defaultTint.r;
+                float g = renderProp.defaultTint.g;
+                float b = renderProp.defaultTint.b;
 
                 const int neighborOffsets[6][3] = {
                     { 1,  0,  0}, {-1,  0,  0},
@@ -174,23 +166,20 @@ void ChunkMesh::generateMeshData() {
                     int nz = z + neighborOffsets[f][2];
 
                     uint8_t neighborId = getBlock(nx, ny, nz);
+                    uint8_t neighborMeta = getMetadata(nx, ny, nz);
+                    bool neighborIsWaterlogged = (neighborMeta & 1) != 0;
                     bool renderFace = false;
 
                     if (neighborId == 0) {
                         renderFace = true;
-                    } else if (neighborId == blockId) {
-                        if (prop.name.find("leaves") != std::string::npos) {
-                            renderFace = true;
-                        } else if (prop.name == "water" || prop.name == "flowing_water") {
-                            renderFace = false;
-                        } else {
-                            renderFace = false;
-                        }
                     } else {
                         const auto& nProp = BlockRegistry::getInstance().getBlock(neighborId);
+                        
+                        // Treat neighbor as transparent if it's non-solid or transparent
                         if (nProp.isTransparent) {
-                            if ((prop.name == "water" || prop.name == "flowing_water") && 
-                                (nProp.name == "water" || nProp.name == "flowing_water")) {
+                            // Don't draw internal water faces between adjacent water or waterlogged blocks
+                            if ((renderProp.name == "water" || renderProp.name == "flowing_water") &&
+                                (nProp.name == "water" || nProp.name == "flowing_water" || neighborIsWaterlogged)) {
                                 renderFace = false;
                             } else {
                                 renderFace = true;
@@ -201,12 +190,12 @@ void ChunkMesh::generateMeshData() {
                     }
 
                     if (renderFace) {
-                        float baseLayer = static_cast<float>(prop.faces[f].baseLayer);
-                        int rawOverlay = prop.faces[f].overlayLayer >= 0 ? prop.faces[f].overlayLayer : -1;
+                        float baseLayer = static_cast<float>(renderProp.faces[f].baseLayer);
+                        int rawOverlay = renderProp.faces[f].overlayLayer >= 0 ? renderProp.faces[f].overlayLayer : -1;
                         float overlayLayer = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
 
-                        float tintBase = prop.faces[f].tintBase ? 1.0f : 0.0f;
-                        float tintOverlay = prop.faces[f].tintOverlay ? 1.0f : 0.0f;
+                        float tintBase = renderProp.faces[f].tintBase ? 1.0f : 0.0f;
+                        float tintOverlay = renderProp.faces[f].tintOverlay ? 1.0f : 0.0f;
                         float faceShading = shading[f];
 
                         float fx = static_cast<float>(x);
@@ -214,7 +203,7 @@ void ChunkMesh::generateMeshData() {
                         float fz = static_cast<float>(z);
 
                         float topOffset = 0.0f;
-                        if ((prop.name == "water" || prop.name == "flowing_water") && f == 2) {
+                        if ((renderProp.name == "water" || renderProp.name == "flowing_water") && f == 2) {
                             topOffset = -0.0625f;
                         }
 
@@ -242,13 +231,13 @@ void ChunkMesh::generateMeshData() {
                         } else if (f == 4) { // North Face
                             fv[0][0] = fx;        fv[0][1] = fy;                     fv[0][2] = fz + 1.0f;
                             fv[1][0] = fx + 1.0f; fv[1][1] = fy;                     fv[1][2] = fz + 1.0f;
-                            fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
-                            fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
+                            fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
+                            fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
                         } else { // South Face
                             fv[0][0] = fx + 1.0f; fv[0][1] = fy;                     fv[0][2] = fz;
                             fv[1][0] = fx;        fv[1][1] = fy;                     fv[1][2] = fz;
-                            fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz;
-                            fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz;
+                            fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz;
+                            fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz;
                         }
 
                         Vertex v0 = { fv[0][0], fv[0][1], fv[0][2], r, g, b, 0.0f, 1.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
@@ -256,13 +245,13 @@ void ChunkMesh::generateMeshData() {
                         Vertex v2 = { fv[2][0], fv[2][1], fv[2][2], r, g, b, 1.0f, 0.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
                         Vertex v3 = { fv[3][0], fv[3][1], fv[3][2], r, g, b, 0.0f, 0.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
 
-                        auto& targetBuffer = prop.isTransparent ? cpuTransparentVertices : cpuOpaqueVertices;
-                        targetBuffer.push_back(v0);
-                        targetBuffer.push_back(v1);
-                        targetBuffer.push_back(v2);
-                        targetBuffer.push_back(v0);
-                        targetBuffer.push_back(v2);
-                        targetBuffer.push_back(v3);
+                        std::vector<Vertex>* cubeBuffer = renderProp.isTransparent ? &cpuTransparentVertices : &cpuOpaqueVertices;
+                        cubeBuffer->push_back(v0);
+                        cubeBuffer->push_back(v1);
+                        cubeBuffer->push_back(v2);
+                        cubeBuffer->push_back(v0);
+                        cubeBuffer->push_back(v2);
+                        cubeBuffer->push_back(v3);
                     }
                 }
             }

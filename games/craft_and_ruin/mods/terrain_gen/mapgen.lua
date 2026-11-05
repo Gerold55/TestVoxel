@@ -1,4 +1,4 @@
--- mapgen.lua - Minecraft-Style Biomes with Smooth Blending
+-- mapgen.lua - Minecraft-Style Biomes with Smooth Blending & Coastal Cattails
 
 local world_seed = 1337
 
@@ -56,7 +56,7 @@ local function octave_noise2d(x, z, octaves, persistence, scale, seed_offset)
         amplitude = amplitude * persistence
         frequency = frequency * 2
     end
-    return total / maxValue
+    return total / (maxValue > 0 and maxValue or 1)
 end
 
 function get_biome_parameters(world_x, world_z)
@@ -141,8 +141,8 @@ function is_cave(world_x, world_y, world_z)
 end
 
 function generate_oak_tree(chunk, x, y, z)
-    local wood_id = engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak") or 5
-    local leaves_id = engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak") or 6
+    local wood_id = (engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak")) or 5
+    local leaves_id = (engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak")) or 6
 
     local trunk_height = 5
     for h = 0, trunk_height - 1 do
@@ -177,17 +177,20 @@ function generate_oak_tree(chunk, x, y, z)
     end
 end
 
-function generate_swamp_tree(chunk, x, y, z)
-    local wood_id = engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak") or 5
-    local leaves_id = engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak") or 6
+function generate_swamp_tree(world_x, world_y, world_z)
+    local wood_id = (engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak")) or 5
+    local leaves_id = (engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak")) or 6
 
-    local trunk_height = 5 + math.floor(get_rand(x, z, 3.1) * 2)
+    local trunk_height = 5 + math.floor(get_rand(world_x, world_z, 3.1) * 2)
+
     for h = 0, trunk_height - 1 do
-        local ty = y + h
-        if ty < 256 then chunk:set_block(x, ty, z, wood_id) end
+        local ty = world_y + h
+        if ty < 256 then
+            engine.set_block(world_x, ty, world_z, wood_id)
+        end
     end
 
-    local leaf_start = y + trunk_height - 3
+    local leaf_start = world_y + trunk_height - 3
     for ly = 0, 3 do
         local current_y = leaf_start + ly
         local radius = (ly == 0 or ly == 3) and 2 or 3
@@ -195,10 +198,10 @@ function generate_swamp_tree(chunk, x, y, z)
         for lx = -radius, radius do
             for lz = -radius, radius do
                 if not (math.abs(lx) == radius and math.abs(lz) == radius) then
-                    local bx, by, bz = x + lx, current_y, z + lz
-                    if bx >= 0 and bx < 16 and by >= 0 and by < 256 and bz >= 0 and bz < 16 then
-                        if chunk:get_block(bx, by, bz) == 0 then
-                            chunk:set_block(bx, by, bz, leaves_id)
+                    local bx, by, bz = world_x + lx, current_y, z + lz
+                    if by >= 0 and by < 256 then
+                        if engine.get_block_name(bx, by, bz) == "air" then
+                            engine.set_block(bx, by, bz, leaves_id)
                         end
                     end
                 end
@@ -208,8 +211,8 @@ function generate_swamp_tree(chunk, x, y, z)
 end
 
 function generate_birch_tree(chunk, x, y, z)
-    local wood_id = engine.get_block_id("log_birch") ~= 0 and engine.get_block_id("log_birch") or 5
-    local leaves_id = engine.get_block_id("leaves_birch") ~= 0 and engine.get_block_id("leaves_birch") or 6
+    local wood_id = (engine.get_block_id("log_birch") ~= 0 and engine.get_block_id("log_birch")) or 5
+    local leaves_id = (engine.get_block_id("leaves_birch") ~= 0 and engine.get_block_id("leaves_birch")) or 6
 
     local trunk_height = 6
     for h = 0, trunk_height - 1 do
@@ -245,7 +248,7 @@ function generate_birch_tree(chunk, x, y, z)
 end
 
 function generate_cactus(chunk, x, y, z)
-    local cactus_id = engine.get_block_id("cactus") ~= 0 and engine.get_block_id("cactus") or 12
+    local cactus_id = (engine.get_block_id("cactus") ~= 0 and engine.get_block_id("cactus")) or 12
     local cactus_height = 1 + math.floor(get_rand(x, z, 9.9) * 3)
     if cactus_height > 3 then cactus_height = 3 end
 
@@ -256,9 +259,8 @@ function generate_cactus(chunk, x, y, z)
 end
 
 function generate_reeds(chunk, x, y, z)
-    local reed_id = engine.get_block_id("reed") ~= 0 and engine.get_block_id("reed") or engine.get_block_id("short_grass")
-    local reed_top_id = engine.get_block_id("reed_top") ~= 0 and engine.get_block_id("reed_top")
-    if reed_top_id == 0 then reed_top_id = reed_id end
+    local reed_id = (engine.get_block_id("reed") ~= 0 and engine.get_block_id("reed")) or (engine.get_block_id("short_grass") or 1)
+    local reed_top_id = (engine.get_block_id("reed_top") ~= 0 and engine.get_block_id("reed_top")) or reed_id
 
     local target_height = 2 + math.floor(get_rand(x, z, 7.7) * 2)
     if target_height > 3 then target_height = 3 end
@@ -272,26 +274,104 @@ function generate_reeds(chunk, x, y, z)
     end
 end
 
+function generate_cattails(chunk, lx, start_y, lz)
+    local cattail_id = (engine.get_block_id("cattail") ~= 0 and engine.get_block_id("cattail")) or (engine.get_block_id("reed") or 1)
+    local cattail_top_id = (engine.get_block_id("cattail_top") ~= 0 and engine.get_block_id("cattail_top")) or cattail_id
+
+    local bottom_y = start_y
+    local top_y = start_y + 1
+
+    if top_y < 256 then
+        -- Set metadata to 1 to flag as waterlogged in C++
+        if chunk.set_block_with_meta then
+            chunk:set_block_with_meta(lx, bottom_y, lz, cattail_id, 1)
+        else
+            chunk:set_block(lx, bottom_y, lz, cattail_id)
+            if chunk.set_metadata then
+                chunk:set_metadata(lx, bottom_y, lz, 1)
+            end
+        end
+        
+        -- Top head above water (normal non-waterlogged plant)
+        chunk:set_block(lx, top_y, lz, cattail_top_id)
+    end
+end
+
+-- Modular Dry-Land Reeds Helper
+local function try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
+    if surface_y + 4 >= 256 then return end
+
+    local is_near_water = false
+    local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
+
+    for _, offset in ipairs(neighbor_offsets) do
+        if is_world_water(world_x + offset[1], world_z + offset[2]) then
+            is_near_water = true
+            break
+        end
+    end
+
+    if is_near_water then
+        local reed_rand = get_rand(world_x, world_z, 8.8)
+        if reed_rand < 0.15 then
+            generate_reeds(chunk, lx, surface_y + 1, lz)
+        end
+    end
+end
+
+-- Modular Submerged Cattails Helper
+local function try_generate_cattails(chunk, lx, lz, world_x, world_z, surface_y, sea_level, continentalness)
+    local water_depth = math.floor(sea_level) - surface_y
+    
+    -- Only place in shallow 1-block deep water so 2-tall cattails project 1 block above water
+    if water_depth ~= 1 then return end
+    if continentalness < -0.3 then return end
+
+    local is_near_bank = false
+    local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
+
+    for _, offset in ipairs(neighbor_offsets) do
+        local n_wx = world_x + offset[1]
+        local n_wz = world_z + offset[2]
+        
+        local c, t, h, r = get_biome_parameters(n_wx, n_wz)
+        local n_height = get_terrain_height(n_wx, n_wz, c, t, h, r)
+        if n_height >= math.floor(sea_level) then
+            is_near_bank = true
+            break
+        end
+    end
+
+    if is_near_bank then
+        local cattail_rand = get_rand(world_x, world_z, 11.2)
+        if cattail_rand < 0.25 then
+            -- Place starting directly inside the water layer at surface_y + 1
+            generate_cattails(chunk, lx, surface_y + 1, lz)
+        end
+    end
+end
+
 function generate_chunk(chunk, chunk_x, chunk_z)
-    local stone_id = engine.get_block_id("stone") ~= 0 and engine.get_block_id("stone") or 2
-    local bedrock_id = engine.get_block_id("bedrock") ~= 0 and engine.get_block_id("bedrock") or 2
+    local stone_id = (engine.get_block_id("stone") ~= 0 and engine.get_block_id("stone")) or 2
+    local bedrock_id = (engine.get_block_id("bedrock") ~= 0 and engine.get_block_id("bedrock")) or 2
 
-    local grass_id = engine.get_block_id("grass") ~= 0 and engine.get_block_id("grass") or 4
-    local dirt_id = engine.get_block_id("dirt") ~= 0 and engine.get_block_id("dirt") or 3
-    local sand_id = engine.get_block_id("sand") ~= 0 and engine.get_block_id("sand") or 7
-    local gravel_id = engine.get_block_id("gravel") ~= 0 and engine.get_block_id("gravel") or 13
-    local water_id = engine.get_block_id("water") ~= 0 and engine.get_block_id("water") or 9
+    local grass_id = (engine.get_block_id("grass") ~= 0 and engine.get_block_id("grass")) or 4
+    local dirt_id = (engine.get_block_id("dirt") ~= 0 and engine.get_block_id("dirt")) or 3
+    local sand_id = (engine.get_block_id("sand") ~= 0 and engine.get_block_id("sand")) or 7
+    local gravel_id = (engine.get_block_id("gravel") ~= 0 and engine.get_block_id("gravel")) or 13
+    local water_id = (engine.get_block_id("water") ~= 0 and engine.get_block_id("water")) or 9
 
-    local mushroom_red_id = engine.get_block_id("mushroom_red") ~= 0 and engine.get_block_id("mushroom_red") or engine.get_block_id("flower_poppy")
-    local mushroom_brown_id = engine.get_block_id("mushroom_brown") ~= 0 and engine.get_block_id("mushroom_brown") or engine.get_block_id("flower_daisy")
-    local blue_orchid_id = engine.get_block_id("flower_bluebell")
+    local mushroom_red_id = (engine.get_block_id("mushroom_red") ~= 0 and engine.get_block_id("mushroom_red")) or (engine.get_block_id("flower_poppy") or 0)
+    local mushroom_brown_id = (engine.get_block_id("mushroom_brown") ~= 0 and engine.get_block_id("mushroom_brown")) or (engine.get_block_id("flower_daisy") or 0)
+    local blue_orchid_id = engine.get_block_id("flower_bluebell") or 0
 
-    local short_grass_id = engine.get_block_id("short_grass")
+    local short_grass_id = engine.get_block_id("short_grass") or 0
     local sea_level = 62.0
 
     local heights = {}
     local water_mask = {}
 
+    -- Pass 1: Compute heightmap & water locations
     for lx = 0, 15 do
         heights[lx] = {}
         water_mask[lx] = {}
@@ -306,6 +386,7 @@ function generate_chunk(chunk, chunk_x, chunk_z)
         end
     end
 
+    -- Pass 2: Place terrain blocks & flora
     for lx = 0, 15 do
         for lz = 0, 15 do
             local world_x = chunk_x * 16 + lx
@@ -346,6 +427,7 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 end
             end
 
+            -- Build column down to bedrock
             for ly = 0, surface_y do
                 if ly == 0 then
                     chunk:set_block(lx, ly, lz, bedrock_id)
@@ -362,11 +444,17 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 end
             end
 
+            -- Fill water bodies
             if is_water_body then
                 for wy = surface_y + 1, math.floor(sea_level) do
                     if wy < 256 then
                         chunk:set_block(lx, wy, lz, water_id)
                     end
+                end
+
+                -- --- SUBMERGED CATTAILS ALONG BANKS ---
+                if lx >= 1 and lx <= 14 and lz >= 1 and lz <= 14 then
+                    try_generate_cattails(chunk, lx, lz, world_x, world_z, surface_y, sea_level, c)
                 end
             end
 
@@ -379,46 +467,29 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         local type_rand = get_rand(world_x, world_z, 2.2)
                         local selected_id = short_grass_id
 
-                        if type_rand < 0.12 and blue_orchid_id ~= 0 then
+                        if type_rand < 0.12 and blue_orchid_id and blue_orchid_id ~= 0 then
                             selected_id = blue_orchid_id
-                        elseif type_rand < 0.20 then
+                        elseif type_rand < 0.20 and mushroom_brown_id and mushroom_brown_id ~= 0 then
                             selected_id = mushroom_brown_id
-                        elseif type_rand < 0.28 then
+                        elseif type_rand < 0.28 and mushroom_red_id and mushroom_red_id ~= 0 then
                             selected_id = mushroom_red_id
                         end
 
-                        if selected_id ~= 0 then
+                        if selected_id and selected_id ~= 0 then
                             chunk:set_block(lx, surface_y + 1, lz, selected_id)
                         end
                     end
 
                     -- Shoreline Reeds Check
                     if surface_y == math.floor(sea_level) then
-                        local is_near_water = false
-                        local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
-                        
-                        for _, offset in ipairs(neighbor_offsets) do
-                            local n_wx = world_x + offset[1]
-                            local n_wz = world_z + offset[2]
-                            if is_world_water(n_wx, n_wz) then
-                                is_near_water = true
-                                break
-                            end
-                        end
-
-                        if is_near_water then
-                            local reed_rand = get_rand(world_x, world_z, 8.8)
-                            if reed_rand < 0.15 and surface_y + 4 < 256 then
-                                generate_reeds(chunk, lx, surface_y + 1, lz)
-                            end
-                        end
+                        try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
                     end
 
                     -- Swamp Oak Trees
                     if lx >= 2 and lx <= 13 and lz >= 2 and lz <= 13 then
                         local tree_rand = get_rand(world_x, world_z, 3.3)
                         if tree_rand < 0.018 and surface_y + 8 < 256 then
-                            generate_swamp_tree(chunk, lx, surface_y + 1, lz)
+                            generate_swamp_tree(world_x, surface_y + 1, world_z)
                         end
                     end
 
@@ -428,39 +499,22 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         local selected_id = short_grass_id
 
                         if type_rand < 0.04 then
-                            selected_id = engine.get_block_id("flower_poppy")
+                            selected_id = engine.get_block_id("flower_poppy") or 0
                         elseif type_rand < 0.08 then
-                            selected_id = engine.get_block_id("flower_daisy")
+                            selected_id = engine.get_block_id("flower_daisy") or 0
                         elseif type_rand < 0.12 then
-                            selected_id = engine.get_block_id("flower_bluebell")
+                            selected_id = engine.get_block_id("flower_bluebell") or 0
                         elseif type_rand < 0.16 then
-                            selected_id = engine.get_block_id("flower_tulip_red")
+                            selected_id = engine.get_block_id("flower_tulip_red") or 0
                         end
 
-                        if selected_id ~= 0 then
+                        if selected_id and selected_id ~= 0 then
                             chunk:set_block(lx, surface_y + 1, lz, selected_id)
                         end
                     end
 
                     if surface_y == math.floor(sea_level) then
-                        local is_near_water = false
-                        local neighbor_offsets = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
-                        
-                        for _, offset in ipairs(neighbor_offsets) do
-                            local n_wx = world_x + offset[1]
-                            local n_wz = world_z + offset[2]
-                            if is_world_water(n_wx, n_wz) then
-                                is_near_water = true
-                                break
-                            end
-                        end
-
-                        if is_near_water then
-                            local reed_rand = get_rand(world_x, world_z, 8.8)
-                            if reed_rand < 0.12 and surface_y + 4 < 256 then
-                                generate_reeds(chunk, lx, surface_y + 1, lz)
-                            end
-                        end
+                        try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
                     end
 
                     if lx >= 2 and lx <= 13 and lz >= 2 and lz <= 13 then
@@ -484,4 +538,4 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     end
 end
 
-print("[Mapgen] Loaded Minecraft-Style Blended Biomes successfully.")
+print("[Mapgen] Loaded Minecraft-Style Blended Biomes with 2-Tall Cattails successfully.")
