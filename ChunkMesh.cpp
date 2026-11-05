@@ -90,8 +90,12 @@ void ChunkMesh::generateMeshData() {
                 const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
                 uint8_t meta = metadata[x][y][z];
 
-                // Check waterlogged status using metadata flag (bit 0 / meta == 1)
-                bool isWaterlogged = (meta & 1) != 0;
+                // Guard waterlogged checks to transparent non-fluid blocks only
+                bool isWaterloggable = (prop.pattern == "plantlike" || prop.isTransparent) &&
+                                       prop.name != "water" && 
+                                       prop.name != "flowing_water";
+
+                bool isWaterlogged = isWaterloggable && ((meta & 1) != 0);
 
                 // --- 1. PLANTLIKE (Cross-planes rendering) ---
                 if (prop.pattern == "plantlike") {
@@ -141,7 +145,7 @@ void ChunkMesh::generateMeshData() {
                     plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v2); plantBuffer->push_back(p2_v1);
                     plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v3); plantBuffer->push_back(p2_v2);
 
-                    // If not waterlogged, finish plant processing. If waterlogged, fall through to generate surrounding water faces!
+                    // If not waterlogged, exit here so the plant does not fall through into the cube pass
                     if (!isWaterlogged) continue;
                 }
 
@@ -167,7 +171,16 @@ void ChunkMesh::generateMeshData() {
 
                     uint8_t neighborId = getBlock(nx, ny, nz);
                     uint8_t neighborMeta = getMetadata(nx, ny, nz);
-                    bool neighborIsWaterlogged = (neighborMeta & 1) != 0;
+
+                    bool neighborIsWaterloggable = false;
+                    if (neighborId != 0) {
+                        const auto& checkProp = BlockRegistry::getInstance().getBlock(neighborId);
+                        neighborIsWaterloggable = (checkProp.pattern == "plantlike" || checkProp.isTransparent) && 
+                                                  checkProp.name != "water" && 
+                                                  checkProp.name != "flowing_water";
+                    }
+                    bool neighborIsWaterlogged = neighborIsWaterloggable && ((neighborMeta & 1) != 0);
+
                     bool renderFace = false;
 
                     if (neighborId == 0) {

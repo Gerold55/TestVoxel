@@ -198,7 +198,7 @@ function generate_swamp_tree(world_x, world_y, world_z)
         for lx = -radius, radius do
             for lz = -radius, radius do
                 if not (math.abs(lx) == radius and math.abs(lz) == radius) then
-                    local bx, by, bz = world_x + lx, current_y, z + lz
+                    local bx, by, bz = world_x + lx, current_y, world_z + lz
                     if by >= 0 and by < 256 then
                         if engine.get_block_name(bx, by, bz) == "air" then
                             engine.set_block(bx, by, bz, leaves_id)
@@ -282,7 +282,7 @@ function generate_cattails(chunk, lx, start_y, lz)
     local top_y = start_y + 1
 
     if top_y < 256 then
-        -- Set metadata to 1 to flag as waterlogged in C++
+        -- Bottom stem inside water: Apply metadata bit 0 (meta = 1) for water-logging flag
         if chunk.set_block_with_meta then
             chunk:set_block_with_meta(lx, bottom_y, lz, cattail_id, 1)
         else
@@ -292,7 +292,7 @@ function generate_cattails(chunk, lx, start_y, lz)
             end
         end
         
-        -- Top head above water (normal non-waterlogged plant)
+        -- Exposed flower head above water level
         chunk:set_block(lx, top_y, lz, cattail_top_id)
     end
 end
@@ -538,4 +538,4 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     end
 end
 
-print("[Mapgen] Loaded Minecraft-Style Blended Biomes with 2-Tall Cattails successfully.")
+print("[Mapgen] Loaded Minecraft-Style Blended Biomes with 2-Tall Waterlogged Cattails successfully.")
