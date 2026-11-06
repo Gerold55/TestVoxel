@@ -88,15 +88,22 @@ void ChunkMesh::generateMeshData() {
                 if (blockId == 0) continue;
 
                 const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
+                uint8_t meta = metadata[x][y][z];
 
-                // --- 1. PLANTLIKE (Cross-planes with safe overlay check) ---
+                // Guard waterlogged checks to transparent non-fluid blocks only
+                bool isWaterloggable = (prop.pattern == "plantlike" || prop.isTransparent) &&
+                                       prop.name != "water" && 
+                                       prop.name != "flowing_water";
+
+                bool isWaterlogged = isWaterloggable && ((meta & 1) != 0);
+
+                // --- 1. PLANTLIKE (Cross-planes rendering) ---
                 if (prop.pattern == "plantlike") {
                     float r = prop.defaultTint.r;
                     float g = prop.defaultTint.g;
                     float b = prop.defaultTint.b;
                     
                     int baseTex = prop.faces[0].baseLayer >= 0 ? prop.faces[0].baseLayer : prop.faces[2].baseLayer;
-                    // Force overlay to -1.0f unless explicitly valid >= 0
                     int rawOverlay = prop.faces[0].overlayLayer >= 0 ? prop.faces[0].overlayLayer : -1;
                     float overlayTex = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
                     
@@ -111,37 +118,45 @@ void ChunkMesh::generateMeshData() {
                     float maxY = (float)y + 1.0f;
                     float faceShading = 1.0f;
 
+                    // Plane 1 Vertices (Diagonal 1)
                     Vertex p1_v0 = { minX, minY, minZ, r, g, b, 0.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v1 = { maxX, minY, maxZ, r, g, b, 1.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v2 = { maxX, maxY, maxZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p1_v3 = { minX, maxY, minZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
+                    // Plane 2 Vertices (Diagonal 2)
                     Vertex p2_v0 = { minX, minY, maxZ, r, g, b, 0.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v1 = { maxX, minY, minZ, r, g, b, 1.0f, 1.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v2 = { maxX, maxY, minZ, r, g, b, 1.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
                     Vertex p2_v3 = { minX, maxY, maxZ, r, g, b, 0.0f, 0.0f, (float)baseTex, overlayTex, tintBase, tintOverlay, faceShading };
 
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v1);
-                    cpuOpaqueVertices.push_back(p1_v2);
-                    cpuOpaqueVertices.push_back(p1_v0);
-                    cpuOpaqueVertices.push_back(p1_v2);
-                    cpuOpaqueVertices.push_back(p1_v3);
+                    // Route transparent plants using pointer
+                    std::vector<Vertex>* plantBuffer = prop.isTransparent ? &cpuTransparentVertices : &cpuOpaqueVertices;
 
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v1);
-                    cpuOpaqueVertices.push_back(p2_v2);
-                    cpuOpaqueVertices.push_back(p2_v0);
-                    cpuOpaqueVertices.push_back(p2_v2);
-                    cpuOpaqueVertices.push_back(p2_v3);
+                    // Front & Back Faces (Plane 1)
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v1); plantBuffer->push_back(p1_v2);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v2); plantBuffer->push_back(p1_v3);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v2); plantBuffer->push_back(p1_v1);
+                    plantBuffer->push_back(p1_v0); plantBuffer->push_back(p1_v3); plantBuffer->push_back(p1_v2);
 
-                    continue;
+                    // Front & Back Faces (Plane 2)
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v1); plantBuffer->push_back(p2_v2);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v2); plantBuffer->push_back(p2_v3);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v2); plantBuffer->push_back(p2_v1);
+                    plantBuffer->push_back(p2_v0); plantBuffer->push_back(p2_v3); plantBuffer->push_back(p2_v2);
+
+                    // If not waterlogged, exit here so the plant does not fall through into the cube pass
+                    if (!isWaterlogged) continue;
                 }
 
-                // --- 2. STANDARD CUBE RENDERING ---
-                float r = prop.defaultTint.r;
-                float g = prop.defaultTint.g;
-                float b = prop.defaultTint.b;
+                // --- 2. STANDARD CUBE / WATERLOGGED WATER RENDERING ---
+                // If block is waterlogged, use water properties for the surrounding box
+                uint8_t waterId = BlockRegistry::getInstance().getBlockId("water");
+                const auto& renderProp = (isWaterlogged && waterId != 0) ? BlockRegistry::getInstance().getBlock(waterId) : prop;
+
+                float r = renderProp.defaultTint.r;
+                float g = renderProp.defaultTint.g;
+                float b = renderProp.defaultTint.b;
 
                 const int neighborOffsets[6][3] = {
                     { 1,  0,  0}, {-1,  0,  0},
@@ -155,23 +170,29 @@ void ChunkMesh::generateMeshData() {
                     int nz = z + neighborOffsets[f][2];
 
                     uint8_t neighborId = getBlock(nx, ny, nz);
+                    uint8_t neighborMeta = getMetadata(nx, ny, nz);
+
+                    bool neighborIsWaterloggable = false;
+                    if (neighborId != 0) {
+                        const auto& checkProp = BlockRegistry::getInstance().getBlock(neighborId);
+                        neighborIsWaterloggable = (checkProp.pattern == "plantlike" || checkProp.isTransparent) && 
+                                                  checkProp.name != "water" && 
+                                                  checkProp.name != "flowing_water";
+                    }
+                    bool neighborIsWaterlogged = neighborIsWaterloggable && ((neighborMeta & 1) != 0);
+
                     bool renderFace = false;
 
                     if (neighborId == 0) {
                         renderFace = true;
-                    } else if (neighborId == blockId) {
-                        if (prop.name.find("leaves") != std::string::npos) {
-                            renderFace = true;
-                        } else if (prop.name == "water" || prop.name == "flowing_water") {
-                            renderFace = false;
-                        } else {
-                            renderFace = false;
-                        }
                     } else {
                         const auto& nProp = BlockRegistry::getInstance().getBlock(neighborId);
+                        
+                        // Treat neighbor as transparent if it's non-solid or transparent
                         if (nProp.isTransparent) {
-                            if ((prop.name == "water" || prop.name == "flowing_water") && 
-                                (nProp.name == "water" || nProp.name == "flowing_water")) {
+                            // Don't draw internal water faces between adjacent water or waterlogged blocks
+                            if ((renderProp.name == "water" || renderProp.name == "flowing_water") &&
+                                (nProp.name == "water" || nProp.name == "flowing_water" || neighborIsWaterlogged)) {
                                 renderFace = false;
                             } else {
                                 renderFace = true;
@@ -182,12 +203,12 @@ void ChunkMesh::generateMeshData() {
                     }
 
                     if (renderFace) {
-                        float baseLayer = static_cast<float>(prop.faces[f].baseLayer);
-                        int rawOverlay = prop.faces[f].overlayLayer >= 0 ? prop.faces[f].overlayLayer : -1;
+                        float baseLayer = static_cast<float>(renderProp.faces[f].baseLayer);
+                        int rawOverlay = renderProp.faces[f].overlayLayer >= 0 ? renderProp.faces[f].overlayLayer : -1;
                         float overlayLayer = (rawOverlay >= 0) ? static_cast<float>(rawOverlay) : -1.0f;
 
-                        float tintBase = prop.faces[f].tintBase ? 1.0f : 0.0f;
-                        float tintOverlay = prop.faces[f].tintOverlay ? 1.0f : 0.0f;
+                        float tintBase = renderProp.faces[f].tintBase ? 1.0f : 0.0f;
+                        float tintOverlay = renderProp.faces[f].tintOverlay ? 1.0f : 0.0f;
                         float faceShading = shading[f];
 
                         float fx = static_cast<float>(x);
@@ -195,19 +216,19 @@ void ChunkMesh::generateMeshData() {
                         float fz = static_cast<float>(z);
 
                         float topOffset = 0.0f;
-                        if ((prop.name == "water" || prop.name == "flowing_water") && f == 2) {
+                        if ((renderProp.name == "water" || renderProp.name == "flowing_water") && f == 2) {
                             topOffset = -0.0625f;
                         }
 
                         float fv[4][3];
                         if (f == 0) {
-                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                    fv[0][2] = fz + 1.0f;
-                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                    fv[1][2] = fz;
+                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                     fv[0][2] = fz + 1.0f;
+                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                     fv[1][2] = fz;
                             fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[2][2] = fz;
                             fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
                         } else if (f == 1) {
-                            fv[0][0] = fx;        fv[0][1] = fy;                    fv[0][2] = fz;
-                            fv[1][0] = fx;        fv[1][1] = fy;                    fv[1][2] = fz + 1.0f;
+                            fv[0][0] = fx;        fv[0][1] = fy;                     fv[0][2] = fz;
+                            fv[1][0] = fx;        fv[1][1] = fy;                     fv[1][2] = fz + 1.0f;
                             fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
                             fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (f == 2 ? topOffset : 0.0f); fv[3][2] = fz;
                         } else if (f == 2) { // Top Face
@@ -221,15 +242,15 @@ void ChunkMesh::generateMeshData() {
                             fv[2][0] = fx + 1.0f; fv[2][1] = fy;        fv[2][2] = fz + 1.0f;
                             fv[3][0] = fx;        fv[3][1] = fy;        fv[3][2] = fz + 1.0f;
                         } else if (f == 4) { // North Face
-                            fv[0][0] = fx;        fv[0][1] = fy;                    fv[0][2] = fz + 1.0f;
-                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                    fv[1][2] = fz + 1.0f;
-                            fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
-                            fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
+                            fv[0][0] = fx;        fv[0][1] = fy;                     fv[0][2] = fz + 1.0f;
+                            fv[1][0] = fx + 1.0f; fv[1][1] = fy;                     fv[1][2] = fz + 1.0f;
+                            fv[2][0] = fx + 1.0f; fv[2][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz + 1.0f;
+                            fv[3][0] = fx;        fv[3][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz + 1.0f;
                         } else { // South Face
-                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                    fv[0][2] = fz;
-                            fv[1][0] = fx;        fv[1][1] = fy;                    fv[1][2] = fz;
-                            fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz;
-                            fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (prop.name == "water" || prop.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz;
+                            fv[0][0] = fx + 1.0f; fv[0][1] = fy;                     fv[0][2] = fz;
+                            fv[1][0] = fx;        fv[1][1] = fy;                     fv[1][2] = fz;
+                            fv[2][0] = fx;        fv[2][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[2][2] = fz;
+                            fv[3][0] = fx + 1.0f; fv[3][1] = fy + 1.0f + (renderProp.name == "water" || renderProp.name == "flowing_water" ? topOffset : 0.0f); fv[3][2] = fz;
                         }
 
                         Vertex v0 = { fv[0][0], fv[0][1], fv[0][2], r, g, b, 0.0f, 1.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
@@ -237,13 +258,13 @@ void ChunkMesh::generateMeshData() {
                         Vertex v2 = { fv[2][0], fv[2][1], fv[2][2], r, g, b, 1.0f, 0.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
                         Vertex v3 = { fv[3][0], fv[3][1], fv[3][2], r, g, b, 0.0f, 0.0f, baseLayer, overlayLayer, tintBase, tintOverlay, faceShading };
 
-                        auto& targetBuffer = prop.isTransparent ? cpuTransparentVertices : cpuOpaqueVertices;
-                        targetBuffer.push_back(v0);
-                        targetBuffer.push_back(v1);
-                        targetBuffer.push_back(v2);
-                        targetBuffer.push_back(v0);
-                        targetBuffer.push_back(v2);
-                        targetBuffer.push_back(v3);
+                        std::vector<Vertex>* cubeBuffer = renderProp.isTransparent ? &cpuTransparentVertices : &cpuOpaqueVertices;
+                        cubeBuffer->push_back(v0);
+                        cubeBuffer->push_back(v1);
+                        cubeBuffer->push_back(v2);
+                        cubeBuffer->push_back(v0);
+                        cubeBuffer->push_back(v2);
+                        cubeBuffer->push_back(v3);
                     }
                 }
             }
@@ -311,7 +332,7 @@ void ChunkMesh::drawOpaque() const {
 }
 
 void ChunkMesh::drawTransparent() const {
-    if (transparentVertexCount == 0 || transparentVAO ==0) return;
+    if (transparentVertexCount == 0 || transparentVAO == 0) return;
     glBindVertexArray(transparentVAO);
     glDrawArrays(GL_TRIANGLES, 0, transparentVertexCount);
     glBindVertexArray(0);

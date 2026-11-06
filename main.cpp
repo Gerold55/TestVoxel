@@ -151,8 +151,8 @@ void initTextureArray() {
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, TEX_SIZE, TEX_SIZE, MAX_TEXTURE_LAYERS, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
 }
 
 int loadTextureToLayer(const std::string& path) {
@@ -397,6 +397,7 @@ out vec4 FragColorOut;
 uniform sampler2DArray textureArray;
 uniform int u_IsGUI;
 uniform vec3 u_SunDir;
+uniform float u_Time;
 
 struct PointLight {
     vec3 position;
@@ -411,7 +412,15 @@ void main() {
     vec4 finalColor = vec4(TintColor, 1.0);
 
     if (BaseLayer >= 0.0) {
-        vec4 baseTex = texture(textureArray, vec3(TexCoord, BaseLayer));
+        vec2 animatedUV = TexCoord;
+
+        // Safely animate translucent liquid UVs without altering physics geometry
+        if (TintColor.b > TintColor.r && TintColor.b > TintColor.g && BaseLayer > 0.0 && u_IsGUI == 0) {
+            animatedUV.x += sin(u_Time * 1.2f + WorldPos.z * 0.5f) * 0.02f;
+            animatedUV.y += u_Time * 0.08f;
+        }
+
+        vec4 baseTex = texture(textureArray, vec3(animatedUV, BaseLayer));
         if (baseTex.a < 0.05) discard;
         
         vec3 baseRgb = (TintBase > 0.5) ? (baseTex.rgb * TintColor) : baseTex.rgb;
@@ -578,9 +587,6 @@ void main() {
 }
 )";
 
-// The font fragment shader uses the GL_RED channel. For simplicity, we don't
-// try to swizzle texture channels, since this shader is only used for fonts
-// and we have one font texture.
 const char* fontFragmentShaderSource = R"(
 #version 330 core
 in vec2 TexCoords;
@@ -593,7 +599,6 @@ void main() {
 }
 )";
 
-// --- 3D MODEL SHADERS ---
 const char* modelVertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -803,13 +808,11 @@ int main() {
         glAttachShader(fontProgram, compileShader(GL_FRAGMENT_SHADER, fontFragmentShaderSource));
         glLinkProgram(fontProgram);
 
-        // Compile 3D Model Shader Program
         GLuint modelShaderProgram = glCreateProgram();
         glAttachShader(modelShaderProgram, compileShader(GL_VERTEX_SHADER, modelVertexShaderSource));
         glAttachShader(modelShaderProgram, compileShader(GL_FRAGMENT_SHADER, modelFragmentShaderSource));
         glLinkProgram(modelShaderProgram);
 
-        // --- LUA USETYPES FOR BONES & MODELS ---
         lua.new_usertype<Bone>("Bone",
             "set_rotation", [](Bone& b, float x, float y, float z) { b.rotation = glm::vec3(x, y, z); },
             "get_rotation", [](Bone& b) { return std::make_tuple(b.rotation.x, b.rotation.y, b.rotation.z); },
@@ -888,7 +891,6 @@ int main() {
         engineTable["set_sun_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setSunTexture(path); };
         engineTable["set_moon_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setMoonTexture(path); };
         
-        // --- MODEL LOADING & MANAGEMENT HOOK FOR LUA ---
         engineTable["load_model"] = [](std::string path) {
             auto model = std::make_shared<AnimatedModel>();
             model->loadFromFile(path);
@@ -914,10 +916,8 @@ int main() {
             if (g_FontRenderer) {
                 Dimensions2D windowSize;
                 int fw, fh;
-                glfwGetFramebufferSize(window, &windowSize.width,
-                         &windowSize.height);
-                g_FontRenderer->renderText(fontProgram, text, x, y, 1.0f,
-                        1.0f, glm::vec4(1.0f), windowSize);
+                glfwGetFramebufferSize(window, &windowSize.width, &windowSize.height);
+                g_FontRenderer->renderText(fontProgram, text, x, y, 1.0f, 1.0f, glm::vec4(1.0f), windowSize);
             }
         };
 
@@ -1054,7 +1054,6 @@ int main() {
                     world.update(player.position, lua);
                     player.update(deltaTime, world, window, lua);
 
-                    // --- UPDATE ANIMATIONS VIA LUA HOOK ---
                     try {
                         sol::function updateAnimFunc = lua["update_player_animation"];
                         if (updateAnimFunc.valid()) {

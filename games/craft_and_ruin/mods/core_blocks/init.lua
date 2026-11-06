@@ -98,6 +98,21 @@ engine.register_block("flowing_water", 0.2, 0.4, 0.9, {
     in_creative = false
 })
 
+-- Register Cattail Stem (Bottom/Middle part in water)
+engine.register_block("cattail", 0.2, 0.6, 0.2, "cw_cattail_bottom.png", nil, {
+    transparent = true,
+    walkable = false,
+    pattern = "plantlike",
+    waterlogged = true
+})
+
+-- Register Cattail Top (Brown fluffy head)
+engine.register_block("cattail_top", 0.4, 0.2, 0.1, "cw_cattail_top.png", nil, {
+    transparent = true,
+    walkable = false,
+    pattern = "plantlike"
+})
+
 -- Register Bedrock (Unbreakable bottom layer)
 engine.register_block("bedrock", 0.2, 0.2, 0.2, "cw_bedrock.png", nil, {
     walkable = true,
