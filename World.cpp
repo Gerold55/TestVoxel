@@ -5,8 +5,10 @@
 #include "CaveGenerator.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <algorithm>
 #include <iostream>
 #include <cmath>
+#include <iterator>
 #include <vector>
 #include <chrono>
 #include <mutex>
@@ -170,9 +172,9 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
     });
 }
 
-void World::render(GLuint shaderProgram) const {
+void World::render(GLuint shaderProgram, glm::vec3 viewPos) const {
     this->upload();
-    this->draw(shaderProgram);
+    this->draw(shaderProgram, viewPos);
 }
 
 
@@ -193,10 +195,10 @@ void World::upload() const
     }
 }
 
-void World::draw(GLuint shaderProgram) const
+void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const
 {
-    for (const auto& [loc, chunk] : this->chunks) {
-
+    for (const auto loc : this->getDrawOrderChunkLocations()) {
+        const auto& chunk = this->chunks.at(loc);
         if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
                 loc.first * CHUNK_WIDTH,
@@ -214,9 +216,26 @@ void World::draw(GLuint shaderProgram) const
                 loc.second * CHUNK_WIDTH
             ));
             glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+            glDepthMask(GL_FALSE);
             chunk->drawTransparent();
+            glDepthMask(GL_TRUE);
         }
     }
+}
+
+std::vector<std::pair<int, int>> World::getDrawOrderChunkLocations() const
+{
+    using loc_t = std::pair<int, int>;
+    std::vector<loc_t> chunkSortingBuffer;
+    chunkSortingBuffer.reserve(this->chunks.size());
+    std::transform(this->chunks.begin(), this->chunks.end(),
+        std::back_inserter(chunkSortingBuffer),
+        [](const auto& it) { return it.first; });
+    std::sort(chunkSortingBuffer.begin(), chunkSortingBuffer.end(),
+        [](loc_t a, loc_t b) {
+            return (a.first * a.first + a.second * a.second)
+                > (b.first * b.first + b.second * b.second); });
+    return chunkSortingBuffer;
 }
 
 void World::renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const {

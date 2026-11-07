@@ -1177,7 +1177,7 @@ int main() {
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_IsGUI"), 0);
 
                 // --- PASS 1: TERRAIN ---
-                g_WorldInstance->render(shaderProgram);
+                g_WorldInstance->render(shaderProgram, player.position);
 
                 // --- RENDER 3D ANIMATED MODEL PASS ---
                 glUseProgram(modelShaderProgram);

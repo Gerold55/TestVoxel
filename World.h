@@ -33,7 +33,7 @@ public:
 
     void update(const glm::vec3& playerPos, sol::state& lua);
     void updateFluids();
-    void render(GLuint shaderProgram) const;
+    void render(GLuint shaderProgram, glm::vec3 viewPos) const;
     void renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const;
 
     uint8_t getBlockAt(WorldLoc loc) const;
@@ -49,5 +49,7 @@ public:
 private:
     void upload() const;
 
-    void draw(GLuint shaderProgram) const;
+    void draw(GLuint shaderProgram, glm::vec3 viewPos) const;
+
+    std::vector<std::pair<int, int>> getDrawOrderChunkLocations() const;
 };
