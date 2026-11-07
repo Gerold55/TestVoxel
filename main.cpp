@@ -900,12 +900,12 @@ int main() {
         engineTable["set_block"] = [](int x, int y, int z, const std::string& blockName) {
             if (g_WorldInstance) {
                 uint8_t id = BlockRegistry::getInstance().getBlockId(blockName);
-                g_WorldInstance->setBlockAt(x, y, z, id);
+                g_WorldInstance->setBlockAt({x, y, z}, id);
             }
         };
         engineTable["get_block_name"] = [](int x, int y, int z) -> std::string {
             if (g_WorldInstance) {
-                uint8_t id = g_WorldInstance->getBlockAt(x, y, z);
+                uint8_t id = g_WorldInstance->getBlockAt({x, y, z});
                 if (id == 0) return "air";
                 return BlockRegistry::getInstance().getBlock(id).name;
             }
@@ -1087,7 +1087,7 @@ int main() {
                 std::string activeItemName = (activeBlockId != 0) ? BlockRegistry::getInstance().getBlock(activeBlockId).name : "air";
 
                 if (leftPress && !leftMousePressedLast && rayResult.hit) {
-                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    uint8_t targetBlockId = world.getBlockAt({rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z});
                     if (targetBlockId != 0) {
                         const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
                         if (activeItemName.find("scythe") != std::string::npos) {
@@ -1096,13 +1096,13 @@ int main() {
                                 scytheFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name);
                             }
                         } else {
-                            world.setBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, 0);
+                            world.setBlockAt({rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z}, 0);
                         }
                     }
                 }
 
                 if (rightPress && !rightMousePressedLast && rayResult.hit) {
-                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    uint8_t targetBlockId = world.getBlockAt({rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z});
                     if (targetBlockId != 0) {
                         const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
                         if (activeItemName.find("hoe") != std::string::npos) {
@@ -1126,7 +1126,7 @@ int main() {
                                         replaceTarget = true;
                                     }
                                     glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (rayResult.blockPos + rayResult.faceNormal);
-                                    world.setBlockAt(placePos.x, placePos.y, placePos.z, selectedBlock);
+                                    world.setBlockAt({static_cast<int>(placePos.x), static_cast<int>(placePos.y), static_cast<int>(placePos.z)}, selectedBlock);
                                 }
                             }
                         }

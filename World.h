@@ -19,6 +19,13 @@ struct PairHash {
     }
 };
 
+struct WorldLoc
+{
+  int x;
+  int y;
+  int z;
+};
+
 class World {
 public:
     World();
@@ -29,11 +36,11 @@ public:
     void render(GLuint shaderProgram) const;
     void renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const;
 
-    uint8_t getBlockAt(int x, int y, int z) const;
-    void setBlockAt(int x, int y, int z, uint8_t blockId);
+    uint8_t getBlockAt(WorldLoc loc) const;
+    void setBlockAt(WorldLoc loc, uint8_t blockId);
 
-    uint8_t getMetadataAt(int x, int y, int z) const;
-    void setMetadataAt(int x, int y, int z, uint8_t meta);
+    uint8_t getMetadataAt(WorldLoc loc) const;
+    void setMetadataAt(WorldLoc loc, uint8_t meta);
 
     void loadChunk(int chunkX, int chunkZ, sol::state& lua);
 
