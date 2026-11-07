@@ -667,7 +667,7 @@ int main() {
         GLFWwindow* window = glfwCreateWindow(1280, 720, "Craft & Ruin - Voxel Engine", NULL, NULL);
         if (!window) { glfwTerminate(); return -1; }
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(0);
+        glfwSwapInterval(60);
 
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
             std::cerr << "[Error] Failed to initialize GLAD\n";
