@@ -261,7 +261,7 @@ void World::updateFluids() {
                         int wx = (cx * CHUNK_WIDTH) + lx;
                         int wz = (cz * CHUNK_WIDTH) + lz;
 
-                        if (y > 0 && getBlockAt(wx, y - 1, wz) == 0) {
+                        if (y > 0 && getBlockAt({wx, y - 1, wz}) == 0) {
                             pendingChanges.push_back({wx, y - 1, wz, flowingWaterId, 0});
                             continue;
                         }
@@ -466,11 +466,13 @@ void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
 void World::renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const {
 }
 
-uint8_t World::getBlockAt(int x, int y, int z) const {
-    if (y < 0 || y >= CHUNK_HEIGHT) return 0;
+uint8_t World::getBlockAt(WorldLoc loc) const {
+    if (loc.y < 0 || loc.y >= CHUNK_HEIGHT) return 0;
 
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
+    int cx = static_cast<int>(std::floor(static_cast<float>(loc.x)
+            / CHUNK_WIDTH));
+    int cz = static_cast<int>(std::floor(static_cast<float>(loc.z)
+            / CHUNK_WIDTH));
 
     auto& mutableChunks = const_cast<std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash>&>(chunks);
 
@@ -479,61 +481,67 @@ uint8_t World::getBlockAt(int x, int y, int z) const {
         return 0;
     }
 
-    int lx = x - cx * CHUNK_WIDTH;
-    int lz = z - cz * CHUNK_WIDTH;
+    int lx = loc.x - cx * CHUNK_WIDTH;
+    int lz = loc.z - cz * CHUNK_WIDTH;
     if (lx < 0) lx += CHUNK_WIDTH;
     if (lz < 0) lz += CHUNK_WIDTH;
     if (lx >= CHUNK_WIDTH) lx -= CHUNK_WIDTH;
     if (lz >= CHUNK_WIDTH) lz -= CHUNK_WIDTH;
 
-    return it->second->getBlock(lx, y, lz);
+    return it->second->getBlock(lx, loc.y, lz);
 }
 
-void World::setBlockAt(int x, int y, int z, uint8_t blockId) {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
+void World::setBlockAt(WorldLoc loc, uint8_t blockId) {
+    int cx = static_cast<int>(std::floor(static_cast<float>(loc.x)
+            / CHUNK_WIDTH));
+    int cz = static_cast<int>(std::floor(static_cast<float>(loc.z)
+            / CHUNK_WIDTH));
 
     auto it = chunks.find({cx, cz});
     if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
+        int lx = loc.x - (cx * CHUNK_WIDTH);
+        int lz = loc.z - (cz * CHUNK_WIDTH);
         if (lx < 0) lx += CHUNK_WIDTH;
         if (lz < 0) lz += CHUNK_WIDTH;
 
-        it->second->setBlock(lx, y, lz, blockId);
+        it->second->setBlock(lx, loc.y, lz, blockId);
         std::async(std::launch::async, [chunk = it->second]() {
             chunk->generateMeshData();
         });
     }
 }
 
-uint8_t World::getMetadataAt(int x, int y, int z) const {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
+uint8_t World::getMetadataAt(WorldLoc loc) const {
+    int cx = static_cast<int>(std::floor(static_cast<float>(loc.x)
+            / CHUNK_WIDTH));
+    int cz = static_cast<int>(std::floor(static_cast<float>(loc.z)
+            / CHUNK_WIDTH));
 
     auto it = chunks.find({cx, cz});
     if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
+        int lx = loc.x - (cx * CHUNK_WIDTH);
+        int lz = loc.z - (cz * CHUNK_WIDTH);
         if (lx < 0) lx += CHUNK_WIDTH;
         if (lz < 0) lz += CHUNK_WIDTH;
-        return it->second->getMetadata(lx, y, lz);
+        return it->second->getMetadata(lx, loc.y, lz);
     }
     return 0;
 }
 
-void World::setMetadataAt(int x, int y, int z, uint8_t meta) {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
+void World::setMetadataAt(WorldLoc loc, uint8_t meta) {
+    int cx = static_cast<int>(std::floor(static_cast<float>(loc.x)
+            / CHUNK_WIDTH));
+    int cz = static_cast<int>(std::floor(static_cast<float>(loc.z)
+            / CHUNK_WIDTH));
 
     auto it = chunks.find({cx, cz});
     if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
+        int lx = loc.x - (cx * CHUNK_WIDTH);
+        int lz = loc.z - (cz * CHUNK_WIDTH);
         if (lx < 0) lx += CHUNK_WIDTH;
         if (lz < 0) lz += CHUNK_WIDTH;
 
-        it->second->setMetadata(lx, y, lz, meta);
+        it->second->setMetadata(lx, loc.y, lz, meta);
         std::async(std::launch::async, [chunk = it->second]() {
             chunk->generateMeshData();
         });

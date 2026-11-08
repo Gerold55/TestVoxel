@@ -34,7 +34,7 @@ inline RaycastResult raycastBlock(const glm::vec3& rayOrigin, const glm::vec3& r
     glm::ivec3 normal(0);
 
     while (distance <= maxDistance) {
-        uint8_t blockId = world.getBlockAt(x, y, z);
+        uint8_t blockId = world.getBlockAt({x, y, z});
         if (blockId != 0) { // Hit solid block
             result.hit = true;
             result.blockPos = glm::ivec3(x, y, z);
