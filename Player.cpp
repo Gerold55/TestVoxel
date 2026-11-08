@@ -48,7 +48,7 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
     int headX = static_cast<int>(std::floor(position.x));
     int headY = static_cast<int>(std::floor(position.y + 1.0f));
     int headZ = static_cast<int>(std::floor(position.z));
-    uint8_t blockAtHead = world.getBlockAt(headX, headY, headZ);
+    uint8_t blockAtHead = world.getBlockAt({headX, headY, headZ});
     if (blockAtHead != 0) {
         const auto& prop = BlockRegistry::getInstance().getBlock(blockAtHead);
         if (prop.name == "water" || prop.name == "flowing_water") {
@@ -123,7 +123,7 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
         for (int x = minX; x <= maxX; ++x) {
             for (int y = minY; y <= maxY; ++y) {
                 for (int z = minZ; z <= maxZ; ++z) {
-                    uint8_t blockId = world.getBlockAt(x, y, z);
+                    uint8_t blockId = world.getBlockAt({x, y, z});
                     if (blockId != 0) {
                         const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
                         if (prop.name == "water" || prop.name == "flowing_water" || !prop.isWalkable) continue;
@@ -154,7 +154,7 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
         for (int x = minX; x <= maxX; ++x) {
             for (int y = minY; y <= maxY; ++y) {
                 for (int z = minZ; z <= maxZ; ++z) {
-                    uint8_t blockId = world.getBlockAt(x, y, z);
+                    uint8_t blockId = world.getBlockAt({x, y, z});
                     if (blockId != 0) {
                         const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
                         if (prop.name == "water" || prop.name == "flowing_water" || !prop.isWalkable) continue;
@@ -186,7 +186,7 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
         for (int x = minX; x <= maxX; ++x) {
             for (int y = minY; y <= maxY; ++y) {
                 for (int z = minZ; z <= maxZ; ++z) {
-                    uint8_t blockId = world.getBlockAt(x, y, z);
+                    uint8_t blockId = world.getBlockAt({x, y, z});
                     if (blockId != 0) {
                         const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
                         if (prop.name == "water" || prop.name == "flowing_water" || !prop.isWalkable) continue;

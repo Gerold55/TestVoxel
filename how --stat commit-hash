@@ -1,0 +1,11 @@
+< [33m8be0244[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mDev[m[33m)[m Trigger CI
+> [33mef68aec[m[33m ([m[1;31morigin/Dev[m[33m)[m Merge branch 'main' into Dev
+>   [33me2a133c[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;31mgithub-desktop-JosiahWI/main[m[33m, [m[1;31mgithub-desktop-JosiahWI/HEAD[m[33m, [m[1;32mmain[m[33m)[m Merge pull request #21 from JosiahWI/refactor/world-position-arguments
+[32m|[m[33m\[m  
+[32m|[m > [33mea4ef9f[m Group world position params into struct
+[32m|[m[32m/[m  
+>   [33m18335ae[m Merge pull request #19 from JosiahWI/feat/enable-vsync
+[34m|[m[35m\[m  
+[34m|[m > [33m62280b5[m Enable 60fps vsync
+[34m|[m[34m/[m  
+> [33mb943507[m Merge pull request #18 from Gerold55/Dev
