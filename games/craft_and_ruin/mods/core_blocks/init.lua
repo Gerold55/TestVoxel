@@ -47,9 +47,10 @@ engine.register_block("log_oak", 1.0, 1.0, 1.0, {
 -- Oak Leaves
 engine.register_block("leaves_oak", 0.2, 0.8, 0.2, "textures/cw_oak_leaves.png", nil, {
     transparent = true,
-    walkable = true,
-    behavior = "solid",
-    tint = true
+    cutout      = true,
+    walkable    = true,
+    behavior    = "solid",
+    tint        = true
 })
 
 -- Birch Log
@@ -66,9 +67,10 @@ engine.register_block("log_birch", 1.0, 1.0, 1.0, {
 -- Birch Leaves (Golden Autumn Tint)
 engine.register_block("leaves_birch", 1.0, 0.85, 0.1, "textures/cw_birch_leaves.png", nil, {
     transparent = true,
-    walkable = true,
-    behavior = "solid",
-    tint = true
+    cutout      = true,
+    walkable    = true,
+    behavior    = "solid",
+    tint        = true
 })
 
 -- Static Water Source Block

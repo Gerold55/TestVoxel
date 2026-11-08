@@ -250,19 +250,21 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
 
     bool shouldTint = (name == "grass" || name == "short_grass");
 
-    if (propsTable.has_value()) {
+        if (propsTable.has_value()) {
         sol::table props = propsTable.value();
         block.isTransparent = props.get_or("transparent", false);
-        block.isWalkable = props.get_or("walkable", (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red"));
-        block.isSelectable = props.get_or("selectable", true);
-        block.hasGravity = props.get_or("gravity", false);
-        block.pattern = props.get_or("pattern", std::string("cube"));
-        shouldTint = props.get_or("tint", shouldTint);
+        block.isCutout      = props.get_or("cutout", false);
+        block.isWalkable    = props.get_or("walkable", (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red"));
+        block.isSelectable  = props.get_or("selectable", true);
+        block.hasGravity    = props.get_or("gravity", false);
+        block.pattern       = props.get_or("pattern", std::string("cube"));
+        shouldTint          = props.get_or("tint", shouldTint);
     } else {
         block.isTransparent = (name == "water" || name == "flowing_water" || name == "leaves" || name == "birch_leaves" || name == "short_grass" || name == "flower_red");
-        block.isWalkable = (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red");
-        block.hasGravity = (name == "sand" || name == "gravel");
-        block.pattern = (name == "short_grass" || name == "flower_red") ? "plantlike" : "cube";
+        block.isCutout      = (name.find("leaves") != std::string::npos);
+        block.isWalkable    = (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red");
+        block.hasGravity    = (name == "sand" || name == "gravel");
+        block.pattern       = (name == "short_grass" || name == "flower_red") ? "plantlike" : "cube";
     }
 
     if (texObj.is<std::string>()) {
