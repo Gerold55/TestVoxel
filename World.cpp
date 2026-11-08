@@ -5,13 +5,7 @@
 #include "CaveGenerator.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-<<<<<<< Updated upstream
-#include <iostream>
-#include <cmath>
-#include <vector>
-=======
 #include <algorithm>
->>>>>>> Stashed changes
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -228,66 +222,6 @@ void World::unloadDistantChunks(int playerChunkX, int playerChunkZ) {
     }
 }
 
-<<<<<<< Updated upstream
-void World::updateFluids() {
-    struct FluidChange {
-        int x, y, z;
-        uint8_t id;
-        uint8_t meta;
-    };
-    std::vector<FluidChange> pendingChanges;
-    int maxUpdates = 100;
-
-    uint8_t waterSourceId = BlockRegistry::getInstance().getBlockId("water");
-    uint8_t flowingWaterId = BlockRegistry::getInstance().getBlockId("flowing_water");
-    if (flowingWaterId == 0) flowingWaterId = waterSourceId;
-
-    for (const auto& pair : chunks) {
-        if (pendingChanges.size() >= static_cast<size_t>(maxUpdates)) break;
-        int cx = pair.first.first;
-        int cz = pair.first.second;
-        auto& chunk = pair.second;
-
-        for (int lx = 0; lx < CHUNK_WIDTH; ++lx) {
-            for (int lz = 0; lz < CHUNK_WIDTH; ++lz) {
-                for (int y = 0; y < CHUNK_HEIGHT; ++y) {
-                    uint8_t currentId = chunk->getBlock(lx, y, lz);
-                    if (currentId == 0) continue;
-
-                    const auto& prop = BlockRegistry::getInstance().getBlock(currentId);
-                    bool isWater = (prop.name == "water" || prop.name == "flowing_water");
-
-                    if (isWater) {
-                        int wx = (cx * CHUNK_WIDTH) + lx;
-                        int wz = (cz * CHUNK_WIDTH) + lz;
-
-                        if (y > 0 && getBlockAt(wx, y - 1, wz) == 0) {
-                            pendingChanges.push_back({wx, y - 1, wz, flowingWaterId, 0});
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (!pendingChanges.empty()) {
-        for (const auto& change : pendingChanges) {
-            int cx = static_cast<int>(std::floor(static_cast<float>(change.x) / CHUNK_WIDTH));
-            int cz = static_cast<int>(std::floor(static_cast<float>(change.z) / CHUNK_WIDTH));
-            auto it = chunks.find({cx, cz});
-            if (it != chunks.end()) {
-                int lx = change.x - (cx * CHUNK_WIDTH);
-                int lz = change.z - (cz * CHUNK_WIDTH);
-                if (lx < 0) lx += CHUNK_WIDTH;
-                if (lz < 0) lz += CHUNK_WIDTH;
-
-                it->second->setBlockWithMeta(lx, change.y, lz, change.id, change.meta);
-                std::async(std::launch::async, [chunk = it->second]() {
-                    chunk->generateMeshData();
-                });
-            }
-=======
 void World::processMeshQueue() {
     int budget = kMaxMeshRebuildsPerFrame;
     auto it = m_meshQueue.begin();
@@ -296,7 +230,6 @@ void World::processMeshQueue() {
         if (chunkIt != chunks.end()) {
             chunkIt->second->generateMeshData();
             --budget;
->>>>>>> Stashed changes
         }
         it = m_meshQueue.erase(it);
     }
@@ -387,9 +320,9 @@ void World::render(GLuint shaderProgram) const {
     this->draw(shaderProgram, glm::vec3(0.0f, 0.0f, 0.0f));
 }
 
-void World::render(GLuint shaderProgram) const {
+void World::render(GLuint shaderProgram, glm::vec3 viewPos) const {
     this->upload();
-    this->draw(shaderProgram);
+    this->draw(shaderProgram, viewPos);
 }
 
 void World::upload() const {
@@ -406,12 +339,6 @@ void World::upload() const {
     }
 }
 
-<<<<<<< Updated upstream
-void World::draw(GLuint shaderProgram) const
-{
-    for (const auto& [loc, chunk] : this->chunks) {
-
-=======
 void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
     // Sorted far to near.
     const auto sortedLocs = getDrawOrderChunkLocations(viewPos);
@@ -430,7 +357,6 @@ void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
 
     for (auto it = sortedLocs.rbegin(); it != sortedLocs.rend(); ++it) {
         const auto& chunk = chunks.at(*it);
->>>>>>> Stashed changes
         if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
             setModel(*it);
             chunk->drawOpaque();
@@ -445,16 +371,7 @@ void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
     for (const auto& loc : sortedLocs) {
         const auto& chunk = chunks.at(loc);
         if (chunk->transparentVertexCount > 0 && chunk->transparentVAO != 0) {
-<<<<<<< Updated upstream
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-                loc.first * CHUNK_WIDTH,
-                0.0f,
-                loc.second * CHUNK_WIDTH
-            ));
-            glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-=======
             setModel(loc);
->>>>>>> Stashed changes
             chunk->drawTransparent();
         }
     }
@@ -462,84 +379,6 @@ void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
     glDepthMask(GL_TRUE);
 }
 
-<<<<<<< Updated upstream
-void World::renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const {
-}
-
-uint8_t World::getBlockAt(int x, int y, int z) const {
-    if (y < 0 || y >= CHUNK_HEIGHT) return 0;
-
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
-
-    auto& mutableChunks = const_cast<std::unordered_map<std::pair<int, int>, std::shared_ptr<ChunkMesh>, PairHash>&>(chunks);
-
-    auto it = mutableChunks.find({cx, cz});
-    if (it == mutableChunks.end()) {
-        return 0;
-    }
-
-    int lx = x - cx * CHUNK_WIDTH;
-    int lz = z - cz * CHUNK_WIDTH;
-    if (lx < 0) lx += CHUNK_WIDTH;
-    if (lz < 0) lz += CHUNK_WIDTH;
-    if (lx >= CHUNK_WIDTH) lx -= CHUNK_WIDTH;
-    if (lz >= CHUNK_WIDTH) lz -= CHUNK_WIDTH;
-
-    return it->second->getBlock(lx, y, lz);
-}
-
-void World::setBlockAt(int x, int y, int z, uint8_t blockId) {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
-
-    auto it = chunks.find({cx, cz});
-    if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
-        if (lx < 0) lx += CHUNK_WIDTH;
-        if (lz < 0) lz += CHUNK_WIDTH;
-
-        it->second->setBlock(lx, y, lz, blockId);
-        std::async(std::launch::async, [chunk = it->second]() {
-            chunk->generateMeshData();
-        });
-    }
-}
-
-uint8_t World::getMetadataAt(int x, int y, int z) const {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
-
-    auto it = chunks.find({cx, cz});
-    if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
-        if (lx < 0) lx += CHUNK_WIDTH;
-        if (lz < 0) lz += CHUNK_WIDTH;
-        return it->second->getMetadata(lx, y, lz);
-    }
-    return 0;
-}
-
-void World::setMetadataAt(int x, int y, int z, uint8_t meta) {
-    int cx = static_cast<int>(std::floor(static_cast<float>(x) / CHUNK_WIDTH));
-    int cz = static_cast<int>(std::floor(static_cast<float>(z) / CHUNK_WIDTH));
-
-    auto it = chunks.find({cx, cz});
-    if (it != chunks.end()) {
-        int lx = x - (cx * CHUNK_WIDTH);
-        int lz = z - (cz * CHUNK_WIDTH);
-        if (lx < 0) lx += CHUNK_WIDTH;
-        if (lz < 0) lz += CHUNK_WIDTH;
-
-        it->second->setMetadata(lx, y, lz, meta);
-        std::async(std::launch::async, [chunk = it->second]() {
-            chunk->generateMeshData();
-        });
-    }
-}
-=======
 std::vector<std::pair<int, int>> World::getDrawOrderChunkLocations(glm::vec3 viewPos) const {
     using Coord = std::pair<int, int>;
 
@@ -605,4 +444,3 @@ void World::setMetadataAt(const glm::ivec3& loc, uint8_t meta) {
                        positiveMod(loc.z, CHUNK_WIDTH), meta);
     markBlockChanged(loc);
 }
->>>>>>> Stashed changes

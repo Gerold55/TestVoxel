@@ -64,7 +64,7 @@ struct GameInfo {
 GameInfo parseGameConfig(const fs::path& gameDirPath) {
     GameInfo info;
     info.folderName = gameDirPath.filename().string();
-    
+
     fs::path confPath = gameDirPath / "game.conf";
     if (!fs::exists(confPath)) {
         info.title = info.folderName;
@@ -250,7 +250,7 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
 
     bool shouldTint = (name == "grass" || name == "short_grass");
 
-        if (propsTable.has_value()) {
+    if (propsTable.has_value()) {
         sol::table props = propsTable.value();
         block.isTransparent = props.get_or("transparent", false);
         block.isCutout      = props.get_or("cutout", false);
@@ -424,7 +424,7 @@ void main() {
 
         vec4 baseTex = texture(textureArray, vec3(animatedUV, BaseLayer));
         if (baseTex.a < 0.05) discard;
-        
+
         vec3 baseRgb = (TintBase > 0.5) ? (baseTex.rgb * TintColor) : baseTex.rgb;
         finalColor = vec4(baseRgb, baseTex.a);
 
@@ -468,11 +468,11 @@ void main() {
     float fogStart = 180.0f;
     float fogEnd = 256.0f;
     float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0f, 1.0f);
-    
+
     vec3 dayFog = vec3(0.55f, 0.78f, 0.92f);
     vec3 sunsetFog = vec3(0.82f, 0.48f, 0.3f);
     vec3 nightFog = vec3(0.04f, 0.06f, 0.12f);
-    
+
     vec3 fogColor = mix(sunsetFog, dayFog, clamp(u_SunDir.y + 0.2f, 0.0f, 1.0f));
     if (u_SunDir.y < 0.0f) {
         fogColor = mix(sunsetFog, nightFog, clamp(-u_SunDir.y * 2.0f, 0.0f, 1.0f));
@@ -639,7 +639,7 @@ void main() {
     float diff = max(dot(norm, -u_LightDir), 0.2f);
     vec4 texColor = texture(texture_diffuse1, TexCoords);
     if(texColor.a < 0.1) discard;
-    
+
     FragColor = vec4(texColor.rgb * diff, texColor.a);
 }
 )";
@@ -669,7 +669,7 @@ int main() {
         GLFWwindow* window = glfwCreateWindow(1280, 720, "Craft & Ruin - Voxel Engine", NULL, NULL);
         if (!window) { glfwTerminate(); return -1; }
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(0);
+        glfwSwapInterval(60);
 
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
             std::cerr << "[Error] Failed to initialize GLAD\n";
@@ -782,7 +782,7 @@ int main() {
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        
+
         initTextureArray();
 
         sol::state lua;
@@ -892,7 +892,7 @@ int main() {
         engineTable["set_fov"] = [](float fov) { g_FieldOfView = fov; };
         engineTable["set_sun_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setSunTexture(path); };
         engineTable["set_moon_texture"] = [](std::string path) { if (g_LightingSystem) g_LightingSystem->setMoonTexture(path); };
-        
+
         engineTable["load_model"] = [](std::string path) {
             auto model = std::make_shared<AnimatedModel>();
             model->loadFromFile(path);
@@ -902,12 +902,12 @@ int main() {
         engineTable["set_block"] = [](int x, int y, int z, const std::string& blockName) {
             if (g_WorldInstance) {
                 uint8_t id = BlockRegistry::getInstance().getBlockId(blockName);
-                g_WorldInstance->setBlockAt(x, y, z, id);
+                g_WorldInstance->setBlockAt(glm::ivec3(x, y, z), id);
             }
         };
         engineTable["get_block_name"] = [](int x, int y, int z) -> std::string {
             if (g_WorldInstance) {
-                uint8_t id = g_WorldInstance->getBlockAt(x, y, z);
+                uint8_t id = g_WorldInstance->getBlockAt(glm::ivec3(x, y, z));
                 if (id == 0) return "air";
                 return BlockRegistry::getInstance().getBlock(id).name;
             }
@@ -1059,9 +1059,9 @@ int main() {
                     try {
                         sol::function updateAnimFunc = lua["update_player_animation"];
                         if (updateAnimFunc.valid()) {
-                            bool isMoving = (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS || 
-                                             glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS || 
-                                             glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS || 
+                            bool isMoving = (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ||
+                                             glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ||
+                                             glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
                                              glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS);
                             updateAnimFunc(deltaTime, isMoving, player.pitch);
                         }
@@ -1089,34 +1089,36 @@ int main() {
                 std::string activeItemName = (activeBlockId != 0) ? BlockRegistry::getInstance().getBlock(activeBlockId).name : "air";
 
                 if (leftPress && !leftMousePressedLast && rayResult.hit) {
-                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    const glm::ivec3 hitPos(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    uint8_t targetBlockId = world.getBlockAt(hitPos);
                     if (targetBlockId != 0) {
                         const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
                         if (activeItemName.find("scythe") != std::string::npos) {
                             sol::protected_function scytheFunc = lua["on_use_scythe"];
                             if (scytheFunc.valid()) {
-                                scytheFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name);
+                                scytheFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name);
                             }
                         } else {
-                            world.setBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, 0);
+                            world.setBlockAt(hitPos, 0);
                         }
                     }
                 }
 
                 if (rightPress && !rightMousePressedLast && rayResult.hit) {
-                    uint8_t targetBlockId = world.getBlockAt(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    const glm::ivec3 hitPos(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z);
+                    uint8_t targetBlockId = world.getBlockAt(hitPos);
                     if (targetBlockId != 0) {
                         const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
                         if (activeItemName.find("hoe") != std::string::npos) {
                             sol::protected_function hoeFunc = lua["on_use_hoe"];
                             if (hoeFunc.valid()) {
-                                hoeFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name);
+                                hoeFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name);
                             }
                         } else {
                             sol::protected_function clickFunc = lua["on_right_click_block"];
                             bool handled = false;
                             if (clickFunc.valid()) {
-                                sol::protected_function_result res = clickFunc(rayResult.blockPos.x, rayResult.blockPos.y, rayResult.blockPos.z, targetProp.name, activeItemName);
+                                sol::protected_function_result res = clickFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name, activeItemName);
                                 if (res.valid()) handled = res.get<bool>();
                             }
 
@@ -1128,7 +1130,7 @@ int main() {
                                         replaceTarget = true;
                                     }
                                     glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (rayResult.blockPos + rayResult.faceNormal);
-                                    world.setBlockAt(placePos.x, placePos.y, placePos.z, selectedBlock);
+                                    world.setBlockAt(glm::ivec3(static_cast<int>(placePos.x), static_cast<int>(placePos.y), static_cast<int>(placePos.z)), selectedBlock);
                                 }
                             }
                         }
@@ -1189,7 +1191,7 @@ int main() {
 
                 glm::mat4 modelMatrix = glm::translate(glm::mat4(1.0f), player.position);
                 modelMatrix = glm::rotate(modelMatrix, glm::radians(-player.yaw + 90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-                
+
                 try {
                     sol::object modelObj = lua["g_PlayerModel"];
                     if (modelObj.is<std::shared_ptr<AnimatedModel>>()) {
@@ -1207,7 +1209,7 @@ int main() {
                     glUniformMatrix4fv(glGetUniformLocation(wireframeProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
                     glUniformMatrix4fv(glGetUniformLocation(wireframeProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
                     glUniformMatrix4fv(glGetUniformLocation(wireframeProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-                    
+
                     glEnable(GL_DEPTH_TEST);
                     glDepthFunc(GL_LESS);
                     glDepthMask(GL_TRUE);
@@ -1261,7 +1263,7 @@ int main() {
                 glUniformMatrix4fv(glGetUniformLocation(sunProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
                 glUniformMatrix4fv(glGetUniformLocation(sunProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
                 glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(sunModel));
-                
+
                 if (g_LightingSystem->sunTextureID != 0) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, g_LightingSystem->sunTextureID);
