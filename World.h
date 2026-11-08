@@ -26,18 +26,6 @@ public:
     // Per-frame: loads nearby chunks, unloads distant ones, rebuilds queued meshes.
     void update(const glm::vec3& playerPos, sol::state& lua);
     void updateFluids();
-<<<<<<< Updated upstream
-    void render(GLuint shaderProgram) const;
-    void renderBlockHighlight(const glm::ivec3& blockPos, const glm::mat4& view, const glm::mat4& proj) const;
-
-    uint8_t getBlockAt(int x, int y, int z) const;
-    void setBlockAt(int x, int y, int z, uint8_t blockId);
-
-    uint8_t getMetadataAt(int x, int y, int z) const;
-    void setMetadataAt(int x, int y, int z, uint8_t meta);
-
-=======
->>>>>>> Stashed changes
     void loadChunk(int chunkX, int chunkZ, sol::state& lua);
 
     // render(shader) sorts from the world origin; prefer the viewPos overload.
@@ -69,10 +57,6 @@ private:
     void unloadDistantChunks(int playerChunkX, int playerChunkZ);
     void ensureLuaSeeded(sol::state& lua);
 
-<<<<<<< Updated upstream
-    void draw(GLuint shaderProgram) const;
-};
-=======
     // World state
     uint32_t m_seed = 0;
     bool     m_luaSeeded = false;
@@ -85,4 +69,3 @@ private:
     // Chunks waiting for a mesh rebuild on the main thread
     std::unordered_set<std::pair<int, int>, PairHash> m_meshQueue;
 };
->>>>>>> Stashed changes
