@@ -41,7 +41,7 @@ underwater.set_fade(0.6, 0.4)
 -- Fallback colors, used only if get_water_color() below is missing.
 underwater.set_shallow_color(0.16, 0.38, 0.72)
 underwater.set_deep_color(0.02, 0.07, 0.20)
-underwater.set_visibility(14, 7)   -- blocks visible near the surface, and at depth
+underwater.set_visibility(25, 15)   -- blocks visible near the surface, and at depth
 underwater.set_full_depth(40)      -- depth where colors and visibility reach their deep values
 
 -- Biome-specific water colors. The engine calls this while the camera is
