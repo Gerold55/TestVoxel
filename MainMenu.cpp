@@ -6,8 +6,7 @@
 
 namespace fs = std::filesystem;
 
-// Helper to load 2D UI image textures directly for subgame headers
-static GLuint loadSubgameMenuTexture(const std::string& path) {
+static GLuint loadMenuTexture(const std::string& path) {
     if (!fs::exists(path)) return 0;
 
     int width, height, nrChannels;
@@ -29,9 +28,16 @@ static GLuint loadSubgameMenuTexture(const std::string& path) {
 MainMenu::MainMenu() {
     scanSubgames();
 
-    buttons.push_back({ "play", "Play Selected Game", -0.25f, -0.05f, 0.50f, 0.12f });
-    buttons.push_back({ "cycle_game", "Select Subgame", -0.25f, -0.20f, 0.50f, 0.12f });
-    buttons.push_back({ "quit", "Quit to Desktop", -0.25f, -0.35f, 0.50f, 0.12f });
+    // Center vertical button stack (Minecraft style)
+    centerButtons.push_back({ "singleplayer", "Singleplayer", -0.30f,  0.08f, 0.60f, 0.08f });
+    centerButtons.push_back({ "multiplayer",  "Multiplayer",  -0.30f, -0.02f, 0.60f, 0.08f });
+    centerButtons.push_back({ "settings",     "Settings",     -0.30f, -0.12f, 0.60f, 0.08f });
+    centerButtons.push_back({ "credits",      "Credits",      -0.30f, -0.22f, 0.60f, 0.08f });
+    centerButtons.push_back({ "quit",         "Exit Game",    -0.30f, -0.32f, 0.60f, 0.08f });
+
+    // Top-right header buttons
+    topRightButtons.push_back({ "top_play", "Play",  0.42f, 0.86f, 0.25f, 0.08f });
+    topRightButtons.push_back({ "mods",     "Mods",  0.70f, 0.86f, 0.25f, 0.08f });
 }
 
 MainMenu::~MainMenu() {
@@ -39,9 +45,12 @@ MainMenu::~MainMenu() {
     if (vbo != 0) glDeleteBuffers(1, &vbo);
     if (headerVAO != 0) glDeleteVertexArrays(1, &headerVAO);
     if (headerVBO != 0) glDeleteBuffers(1, &headerVBO);
+    if (iconVAO != 0) glDeleteVertexArrays(1, &iconVAO);
+    if (iconVBO != 0) glDeleteBuffers(1, &iconVBO);
 
     for (auto& game : availableGames) {
         if (game.headerTextureID != 0) glDeleteTextures(1, &game.headerTextureID);
+        if (game.iconTextureID != 0) glDeleteTextures(1, &game.iconTextureID);
     }
 }
 
@@ -52,6 +61,8 @@ void MainMenu::scanSubgames() {
         gamesPath = "../../games";
     }
 
+    std::cout << "[Menu] Scanning games path: " << fs::absolute(gamesPath) << std::endl;
+
     if (fs::exists(gamesPath)) {
         for (const auto& entry : fs::directory_iterator(gamesPath)) {
             if (entry.is_directory()) {
@@ -59,7 +70,6 @@ void MainMenu::scanSubgames() {
                 info.folderName = entry.path().filename().string();
                 info.title = info.folderName;
 
-                // 1. Read game.conf or mod.conf metadata if available
                 std::string confPath = entry.path().string() + "/game.conf";
                 if (!fs::exists(confPath)) {
                     confPath = entry.path().string() + "/mod.conf";
@@ -74,7 +84,6 @@ void MainMenu::scanSubgames() {
                             std::string key = line.substr(0, eqPos);
                             std::string value = line.substr(eqPos + 1);
 
-                            // Trim whitespace
                             key.erase(0, key.find_first_not_of(" \t\r\n"));
                             key.erase(key.find_last_not_of(" \t\r\n") + 1);
                             value.erase(0, value.find_first_not_of(" \t\r\n"));
@@ -87,9 +96,11 @@ void MainMenu::scanSubgames() {
                     }
                 }
 
-                // 2. Load custom menu graphic from menu/header.png
                 std::string headerPath = entry.path().string() + "/menu/header.png";
-                info.headerTextureID = loadSubgameMenuTexture(headerPath);
+                std::string iconPath = entry.path().string() + "/icon.png";
+
+                info.headerTextureID = loadMenuTexture(headerPath);
+                info.iconTextureID = loadMenuTexture(iconPath);
 
                 availableGames.push_back(info);
             }
@@ -97,16 +108,18 @@ void MainMenu::scanSubgames() {
     }
 
     if (availableGames.empty()) {
-        availableGames.push_back({ "craft_and_ruin", "Craft & Ruin", "Developer", "Default Game", 0 });
+        availableGames.push_back({ "craft_and_ruin", "Craft & Ruin", "Developer", "Default Game", 0, 0 });
     }
 }
+
+// Store total vertex count as a member or static tracking variable
+static int g_TotalUIVertices = 0;
 
 void MainMenu::updateAndBuildBuffers(double mouseX, double mouseY, int screenWidth, int screenHeight) {
     if (screenWidth == 0 || screenHeight == 0) return;
 
     float ndcX = (static_cast<float>(mouseX) / screenWidth) * 2.0f - 1.0f;
     float ndcY = 1.0f - (static_cast<float>(mouseY) / screenHeight) * 2.0f;
-    float aspect = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
 
     std::vector<float> vertices;
 
@@ -123,26 +136,37 @@ void MainMenu::updateAndBuildBuffers(double mouseX, double mouseY, int screenWid
         vertices.insert(vertices.end(), std::begin(q), std::end(q));
     };
 
-    // Dark Background Overlay
+    // 1. Dark background base color
     addQuad(-1.0f, -1.0f, 2.0f, 2.0f, glm::vec4(0.12f, 0.12f, 0.12f, 1.0f));
 
-    if (selectedGameIndex < static_cast<int>(availableGames.size())) {
-        buttons[1].label = "Game: " + availableGames[selectedGameIndex].title;
-    }
+    // 2. Top Bar Background Strip
+    addQuad(-1.0f, 0.80f, 2.0f, 0.20f, glm::vec4(0.16f, 0.16f, 0.16f, 0.95f));
 
-    // Render Buttons
-    for (auto& btn : buttons) {
-        float actualWidth = btn.w / aspect;
-        btn.isHovered = (ndcX >= btn.x && ndcX <= (btn.x + actualWidth) &&
+    // 3. Process Center Buttons
+    for (auto& btn : centerButtons) {
+        btn.isHovered = (ndcX >= btn.x && ndcX <= (btn.x + btn.w) &&
                          ndcY >= btn.y && ndcY <= (btn.y + btn.h));
 
-        float border = 0.005f;
-        glm::vec4 bgColor = btn.isHovered ? glm::vec4(0.35f, 0.35f, 0.35f, 0.95f) : glm::vec4(0.20f, 0.20f, 0.20f, 0.90f);
-        addQuad(btn.x, btn.y, actualWidth, btn.h, bgColor);
-
-        glm::vec4 borderColor = btn.isHovered ? glm::vec4(1.0f, 0.84f, 0.0f, 1.0f) : glm::vec4(0.5f, 0.5f, 0.5f, 0.8f);
-        addQuad(btn.x - border, btn.y - border, actualWidth + (border * 2.0f), btn.h + (border * 2.0f), borderColor);
+        glm::vec4 bgColor = btn.isHovered ? glm::vec4(0.35f, 0.35f, 0.45f, 0.95f) : glm::vec4(0.20f, 0.20f, 0.20f, 0.90f);
+        
+        float border = 0.003f;
+        addQuad(btn.x - border, btn.y - border, btn.w + (border * 2.0f), btn.h + (border * 2.0f), glm::vec4(0.08f, 0.08f, 0.08f, 1.0f));
+        addQuad(btn.x, btn.y, btn.w, btn.h, bgColor);
     }
+
+    // 4. Process Top-Right Header Buttons
+    for (auto& btn : topRightButtons) {
+        btn.isHovered = (ndcX >= btn.x && ndcX <= (btn.x + btn.w) &&
+                         ndcY >= btn.y && ndcY <= (btn.y + btn.h));
+
+        glm::vec4 bgColor = btn.isHovered ? glm::vec4(0.35f, 0.35f, 0.45f, 0.95f) : glm::vec4(0.20f, 0.20f, 0.20f, 0.90f);
+        
+        float border = 0.003f;
+        addQuad(btn.x - border, btn.y - border, btn.w + (border * 2.0f), btn.h + (border * 2.0f), glm::vec4(0.08f, 0.08f, 0.08f, 1.0f));
+        addQuad(btn.x, btn.y, btn.w, btn.h, bgColor);
+    }
+
+    g_TotalUIVertices = static_cast<int>(vertices.size() / 6);
 
     if (vao == 0) glGenVertexArrays(1, &vao);
     if (vbo == 0) glGenBuffers(1, &vbo);
@@ -165,61 +189,110 @@ std::string MainMenu::handleMouseClick(double mouseX, double mouseY, int screenW
 
     float ndcX = (static_cast<float>(mouseX) / screenWidth) * 2.0f - 1.0f;
     float ndcY = 1.0f - (static_cast<float>(mouseY) / screenHeight) * 2.0f;
-    float aspect = static_cast<float>(screenWidth) / static_cast<float>(screenHeight);
 
-    for (auto& btn : buttons) {
-        float actualWidth = btn.w / aspect;
-        if (ndcX >= btn.x && ndcX <= (btn.x + actualWidth) &&
-            ndcY >= btn.y && ndcY <= (btn.y + btn.h)) {
-            
-            if (btn.id == "play") {
-                return "play";
-            } else if (btn.id == "cycle_game") {
-                if (!availableGames.empty()) {
-                    selectedGameIndex = (selectedGameIndex + 1) % availableGames.size();
-                }
-                return "cycle";
-            } else if (btn.id == "quit") {
-                return "quit";
-            }
+    // Check Center Buttons
+    for (auto& btn : centerButtons) {
+        if (ndcX >= btn.x && ndcX <= (btn.x + btn.w) && ndcY >= btn.y && ndcY <= (btn.y + btn.h)) {
+            if (btn.id == "singleplayer") return "play";
+            if (btn.id == "quit") return "quit";
         }
     }
+
+    // Check Top-Right Buttons
+    for (auto& btn : topRightButtons) {
+        if (ndcX >= btn.x && ndcX <= (btn.x + btn.w) && ndcY >= btn.y && ndcY <= (btn.y + btn.h)) {
+            if (btn.id == "top_play") return "play";
+        }
+    }
+
+    // Check Top-Left Subgame Icons
+    float iconStartX = -0.95f;
+    float iconSize = 0.12f;
+    for (size_t i = 0; i < availableGames.size(); ++i) {
+        float ix = iconStartX + static_cast<float>(i) * 0.14f;
+        float iy = 0.84f;
+        if (ndcX >= ix && ndcX <= (ix + iconSize) && ndcY >= iy && ndcY <= (iy + iconSize)) {
+            selectedGameIndex = static_cast<int>(i);
+            return "select_game";
+        }
+    }
+
     return "";
 }
 
-void MainMenu::render(GLuint uiShader, GLuint fontShader, FontRenderer& fontRenderer, int screenWidth, int screenHeight) {
+void MainMenu::render(GLuint uiShader, GLuint texturedUIShader, GLuint fontShader, FontRenderer& fontRenderer, int screenWidth, int screenHeight) {
     if (vao == 0) return;
 
-    float aspect = (screenHeight > 0) ? static_cast<float>(screenWidth) / static_cast<float>(screenHeight) : 1.0f;
-
-    // 1. Draw Quads and Background
     glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // 1. Draw UI Background Quads & Buttons
     glUseProgram(uiShader);
     glBindVertexArray(vao);
-
-    GLsizei totalVertices = 6 + static_cast<GLsizei>(buttons.size() * 12);
-    glDrawArrays(GL_TRIANGLES, 0, totalVertices);
+    glDrawArrays(GL_TRIANGLES, 0, g_TotalUIVertices);
     glBindVertexArray(0);
 
-    // 2. Draw Title Header (Image or Fallback Text)
+    // 2. Render Top-Left Subgame Icons
+    glUseProgram(texturedUIShader);
+    float iconStartX = -0.95f;
+    float iconSize = 0.12f;
+    float iconY = 0.84f;
+
+    for (size_t i = 0; i < availableGames.size(); ++i) {
+        const auto& game = availableGames[i];
+        if (game.iconTextureID != 0) {
+            float ix = iconStartX + static_cast<float>(i) * 0.14f;
+            float quadVerts[] = {
+                ix,            iconY,            0.0f, 0.0f,
+                ix + iconSize, iconY,            1.0f, 0.0f,
+                ix + iconSize, iconY + iconSize, 1.0f, 1.0f,
+
+                ix,            iconY,            0.0f, 0.0f,
+                ix + iconSize, iconY + iconSize, 1.0f, 1.0f,
+                ix,            iconY + iconSize, 0.0f, 1.0f
+            };
+
+            if (iconVAO == 0) glGenVertexArrays(1, &iconVAO);
+            if (iconVBO == 0) glGenBuffers(1, &iconVBO);
+
+            glBindVertexArray(iconVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, iconVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_DYNAMIC_DRAW);
+
+            GLsizei stride = 4 * sizeof(float);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(2 * sizeof(float)));
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, game.iconTextureID);
+            glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
+
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glBindVertexArray(0);
+        }
+    }
+
+    // 3. Draw Title Header (Image or Fallback Text)
     if (selectedGameIndex < static_cast<int>(availableGames.size())) {
         const auto& game = availableGames[selectedGameIndex];
 
         if (game.headerTextureID != 0) {
-            // Draw Subgame Header Graphic
-            float headerW = 0.8f / aspect;
-            float headerH = 0.25f;
+            float headerW = 0.65f;
+            float headerH = 0.18f;
             float headerX = -headerW / 2.0f;
-            float headerY = 0.25f;
+            float headerY = 0.40f;
 
             float quadVerts[] = {
-                headerX,           headerY,           0.0f, 0.0f,
-                headerX + headerW, headerY,           1.0f, 0.0f,
+                headerX,         headerY,          0.0f, 0.0f,
+                headerX + headerW, headerY,          1.0f, 0.0f,
                 headerX + headerW, headerY + headerH, 1.0f, 1.0f,
 
-                headerX,           headerY,           0.0f, 0.0f,
+                headerX,         headerY,          0.0f, 0.0f,
                 headerX + headerW, headerY + headerH, 1.0f, 1.0f,
-                headerX,           headerY + headerH, 0.0f, 1.0f
+                headerX,         headerY + headerH, 0.0f, 1.0f
             };
 
             if (headerVAO == 0) glGenVertexArrays(1, &headerVAO);
@@ -235,45 +308,46 @@ void MainMenu::render(GLuint uiShader, GLuint fontShader, FontRenderer& fontRend
             glEnableVertexAttribArray(1);
             glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(2 * sizeof(float)));
 
-            glUseProgram(fontShader);
+            glUseProgram(texturedUIShader);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, game.headerTextureID);
-            glUniform1i(glGetUniformLocation(fontShader, "fontTexture"), 0);
-            glUniform4f(glGetUniformLocation(fontShader, "textColor"), 1.0f, 1.0f, 1.0f, 1.0f);
+            glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
             glBindVertexArray(0);
         } else {
-            // Text Fallback Header
             std::string titleText = game.title;
-            float titleScaleX = 0.060f;
-            float titleScaleY = 0.080f;
-            float titleWidth = titleText.length() * (titleScaleX / aspect);
-            fontRenderer.renderText(fontShader, titleText, -titleWidth / 2.0f,
-                    0.35f, titleScaleX, titleScaleY,
-                    glm::vec4(1.0f, 0.84f, 0.0f, 1.0f),
-                    Dimensions2D{windowWidth, windowHeight});
+            float pixelX = ((-0.3f + 1.0f) * 0.5f) * screenWidth;
+            float pixelY = ((1.0f - 0.45f) * 0.5f) * screenHeight;
+            fontRenderer.renderText(fontShader, titleText, pixelX, pixelY, 1.2f, 1.2f, glm::vec4(1.0f, 0.84f, 0.0f, 1.0f), Dimensions2D{screenWidth, screenHeight});
         }
     }
 
-    // 3. Render Button Labels
-    for (const auto& btn : buttons) {
+    // 4. Render Center Button Labels
+    for (const auto& btn : centerButtons) {
         if (!btn.label.empty()) {
-            float textScaleX = 0.035f;
-            float textScaleY = 0.05f;
+            float pixelX = ((btn.x + 1.0f) * 0.5f) * screenWidth + (btn.w * 0.24f * screenWidth);
+            float pixelY = ((1.0f - (btn.y + btn.h * 0.65f)) * 0.5f) * screenHeight;
 
-            float actualWidth = btn.w / aspect;
-            float textWidth = btn.label.length() * (textScaleX / aspect);
-
-            float textX = btn.x + (actualWidth - textWidth) / 2.0f;
-            float textY = btn.y + (btn.h - textScaleY) / 2.0f;
-
-            glm::vec4 textColor = btn.isHovered ? glm::vec4(1.0f, 1.0f, 1.0f, 1.0f) : glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
-            fontRenderer.renderText(fontShader, btn.label, textX, textY,
-                    textScaleX, textScaleY, textColor,
-                    Dimensions2D{windowWidth, windowHeight});
+            glm::vec4 textColor = btn.isHovered ? glm::vec4(1.0f, 1.0f, 0.6f, 1.0f) : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+            fontRenderer.renderText(fontShader, btn.label, pixelX, pixelY, 0.7f, 0.7f, textColor, Dimensions2D{screenWidth, screenHeight});
         }
     }
+
+    // 5. Render Top-Right Button Labels ("Play", "Mods")
+    for (const auto& btn : topRightButtons) {
+        if (!btn.label.empty()) {
+            float pixelX = ((btn.x + 1.0f) * 0.5f) * screenWidth + (btn.w * 0.32f * screenWidth);
+            float pixelY = ((1.0f - (btn.y + btn.h * 0.65f)) * 0.5f) * screenHeight;
+
+            glm::vec4 textColor = btn.isHovered ? glm::vec4(1.0f, 1.0f, 0.6f, 1.0f) : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+            fontRenderer.renderText(fontShader, btn.label, pixelX, pixelY, 0.7f, 0.7f, textColor, Dimensions2D{screenWidth, screenHeight});
+        }
+    }
+
+    // 6. Render Bottom Corner Version & Copyright Info
+    fontRenderer.renderText(fontShader, "Craft & Ruin 5.17.0-dev", 15.0f, static_cast<float>(screenHeight) - 25.0f, 0.5f, 0.5f, glm::vec4(0.8f, 0.8f, 0.8f, 1.0f), Dimensions2D{screenWidth, screenHeight});
+    fontRenderer.renderText(fontShader, "(c) 2010-2026 Developer Studio", static_cast<float>(screenWidth) - 260.0f, static_cast<float>(screenHeight) - 25.0f, 0.5f, 0.5f, glm::vec4(0.8f, 0.8f, 0.8f, 1.0f), Dimensions2D{screenWidth, screenHeight});
 
     glEnable(GL_DEPTH_TEST);
 }

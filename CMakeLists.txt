@@ -28,10 +28,8 @@ if (NOT unofficial-lua_FOUND AND NOT Lua_FOUND)
     message(FATAL_ERROR "Could not find unofficial-lua (VCPKG) or Lua library")
 endif()
 
-
 add_library(stb IMPORTED INTERFACE)
 add_library(unofficial::stb ALIAS stb)
-
 target_include_directories(stb INTERFACE "${CMAKE_CURRENT_LIST_DIR}/libs")
 
 add_executable(VoxelEngine 
@@ -53,6 +51,8 @@ add_executable(VoxelEngine
     CaveGenerator.h
     Model.cpp
     Model.h
+    MainMenu.cpp
+    MainMenu.h
     Clouds.cpp
     deps/glad.c
 )

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <random>
@@ -15,10 +16,13 @@
 
 namespace {
 
-constexpr int kMaxChunkLoadsPerFrame   = 2;
-constexpr int kMaxMeshRebuildsPerFrame = 2;
-constexpr int kMaxFluidUpdatesPerTick  = 100;
-constexpr double kMaxUploadMs          = 5.0;
+using Clock = std::chrono::steady_clock;
+
+constexpr int kMinRenderDistance = 2;
+constexpr int kMaxRenderDistance = 16;
+constexpr int kUnloadMargin = 2;              // chunks beyond render distance before unloading
+constexpr int kMaxFluidUpdatesPerTick = 256;
+constexpr float kChunkFadeSeconds = 0.6f;     // how long a new chunk takes to fully appear
 
 // Neighbor slots match ChunkMesh::getBlock():
 //   0 = +X, 1 = -X, 4 = +Z, 5 = -Z
@@ -29,13 +33,16 @@ struct NeighborDir {
 };
 
 constexpr NeighborDir kNeighborDirs[] = {
-    { 1,  0, 0, 1},   // +X
-    {-1,  0, 1, 0},   // -X
-    { 0,  1, 4, 5},   // +Z
-    { 0, -1, 5, 4},   // -Z
+    { 1,  0, 0, 1},
+    {-1,  0, 1, 0},
+    { 0,  1, 4, 5},
+    { 0, -1, 5, 4},
 };
 
-// Floor division and modulo that behave correctly for negative coordinates.
+constexpr int kFluidOffsets[7][3] = {
+    {0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
+};
+
 inline int floorDiv(int a, int b) {
     int q = a / b;
     if ((a % b != 0) && ((a < 0) != (b < 0))) --q;
@@ -45,6 +52,60 @@ inline int floorDiv(int a, int b) {
 inline int positiveMod(int a, int b) {
     int m = a % b;
     return m < 0 ? m + b : m;
+}
+
+float elapsedMs(Clock::time_point start) {
+    return std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+}
+
+int chunkDist2(const World::ChunkCoord& a, const World::ChunkCoord& b) {
+    const int dx = a.first - b.first;
+    const int dz = a.second - b.second;
+    return dx * dx + dz * dz;
+}
+
+glm::vec3 originOf(const World::ChunkCoord& c) {
+    return glm::vec3(static_cast<float>(c.first * CHUNK_WIDTH),
+                     0.0f,
+                     static_cast<float>(c.second * CHUNK_WIDTH));
+}
+
+// Gribb-Hartmann frustum extraction from a combined projection * view matrix.
+struct Frustum {
+    glm::vec4 planes[6];
+};
+
+Frustum makeFrustum(const glm::mat4& m) {
+    const glm::vec4 row0(m[0][0], m[1][0], m[2][0], m[3][0]);
+    const glm::vec4 row1(m[0][1], m[1][1], m[2][1], m[3][1]);
+    const glm::vec4 row2(m[0][2], m[1][2], m[2][2], m[3][2]);
+    const glm::vec4 row3(m[0][3], m[1][3], m[2][3], m[3][3]);
+
+    Frustum f;
+    f.planes[0] = row3 + row0;  // left
+    f.planes[1] = row3 - row0;  // right
+    f.planes[2] = row3 + row1;  // bottom
+    f.planes[3] = row3 - row1;  // top
+    f.planes[4] = row3 + row2;  // near
+    f.planes[5] = row3 - row2;  // far
+
+    for (auto& p : f.planes) {
+        const float len = glm::length(glm::vec3(p));
+        if (len > 0.0f) p /= len;
+    }
+    return f;
+}
+
+// True if the axis-aligned box [boxMin, boxMax] is at least partly inside the frustum.
+bool boxInFrustum(const Frustum& f, const glm::vec3& boxMin, const glm::vec3& boxMax) {
+    for (const auto& p : f.planes) {
+        const glm::vec3 n(p);
+        const glm::vec3 positive(n.x >= 0.0f ? boxMax.x : boxMin.x,
+                                 n.y >= 0.0f ? boxMax.y : boxMin.y,
+                                 n.z >= 0.0f ? boxMax.z : boxMin.z);
+        if (glm::dot(n, positive) + p.w < 0.0f) return false;
+    }
+    return true;
 }
 
 // Procedural fallback used when the Lua mapgen is missing.
@@ -95,22 +156,22 @@ World::World() {
 World::~World() = default;
 
 // ---------------------------------------------------------------------------
-// Lookup and bookkeeping helpers
+// Lookup and bookkeeping
 // ---------------------------------------------------------------------------
 
 ChunkMesh* World::chunkAt(const glm::ivec3& loc) const {
-    const auto it = chunks.find({floorDiv(loc.x, CHUNK_WIDTH), floorDiv(loc.z, CHUNK_WIDTH)});
+    const auto it = chunks.find(ChunkCoord{floorDiv(loc.x, CHUNK_WIDTH), floorDiv(loc.z, CHUNK_WIDTH)});
     return it != chunks.end() ? it->second.get() : nullptr;
 }
 
 void World::markMeshDirty(int cx, int cz) {
-    if (chunks.count({cx, cz})) {
-        m_meshQueue.insert({cx, cz});
+    const ChunkCoord c{cx, cz};
+    if (chunks.count(c)) {
+        m_meshQueue.insert(c);
     }
 }
 
-// Marks the chunk containing loc, plus any neighbor whose boundary faces
-// depend on this block.
+// Marks the chunk containing loc, plus any neighbor whose boundary faces depend on it.
 void World::markBlockChanged(const glm::ivec3& loc) {
     const int cx = floorDiv(loc.x, CHUNK_WIDTH);
     const int cz = floorDiv(loc.z, CHUNK_WIDTH);
@@ -124,27 +185,24 @@ void World::markBlockChanged(const glm::ivec3& loc) {
     if (lz == CHUNK_WIDTH - 1) markMeshDirty(cx, cz + 1);
 }
 
-// Connects a chunk to whichever neighbors are loaded, in both directions.
 void World::linkChunk(int cx, int cz) {
-    auto selfIt = chunks.find({cx, cz});
+    auto selfIt = chunks.find(ChunkCoord{cx, cz});
     if (selfIt == chunks.end()) return;
     ChunkMesh* self = selfIt->second.get();
 
     for (const auto& d : kNeighborDirs) {
-        auto nIt = chunks.find({cx + d.dx, cz + d.dz});
+        auto nIt = chunks.find(ChunkCoord{cx + d.dx, cz + d.dz});
         ChunkMesh* n = (nIt != chunks.end()) ? nIt->second.get() : nullptr;
         self->neighbors[d.slot] = n;
         if (n) n->neighbors[d.opposite] = self;
     }
 }
 
-// Disconnects a chunk from its neighbors before it is destroyed, and
-// remeshes neighbors whose border faces now need to be drawn.
 void World::unlinkChunk(int cx, int cz) {
     for (const auto& d : kNeighborDirs) {
         const int nx = cx + d.dx;
         const int nz = cz + d.dz;
-        auto nIt = chunks.find({nx, nz});
+        auto nIt = chunks.find(ChunkCoord{nx, nz});
         if (nIt != chunks.end()) {
             nIt->second->neighbors[d.opposite] = nullptr;
             markMeshDirty(nx, nz);
@@ -152,8 +210,15 @@ void World::unlinkChunk(int cx, int cz) {
     }
 }
 
+void World::setRenderDistance(int chunks) {
+    const int clamped = std::clamp(chunks, kMinRenderDistance, kMaxRenderDistance);
+    if (clamped == m_renderDistance) return;
+    m_renderDistance = clamped;
+    m_queueDirty = true;
+}
+
 // ---------------------------------------------------------------------------
-// Per-frame update: load, unload, remesh
+// Per-frame update: queue, load, unload, mesh
 // ---------------------------------------------------------------------------
 
 void World::ensureLuaSeeded(sol::state& lua) {
@@ -169,42 +234,62 @@ void World::ensureLuaSeeded(sol::state& lua) {
     m_luaSeeded = true;
 }
 
+// Missing chunks inside the render radius, nearest to the player first.
+void World::rebuildLoadQueue() {
+    m_loadQueue.clear();
+    const int r = m_renderDistance;
+    for (int dx = -r; dx <= r; ++dx) {
+        for (int dz = -r; dz <= r; ++dz) {
+            const ChunkCoord c{m_playerChunk.first + dx, m_playerChunk.second + dz};
+            if (chunks.find(c) == chunks.end()) {
+                m_loadQueue.push_back(c);
+            }
+        }
+    }
+
+    const ChunkCoord p = m_playerChunk;
+    std::sort(m_loadQueue.begin(), m_loadQueue.end(),
+              [p](const ChunkCoord& a, const ChunkCoord& b) {
+                  return chunkDist2(a, p) < chunkDist2(b, p);
+              });
+}
+
+void World::loadQueuedChunks(sol::state& lua) {
+    const auto start = Clock::now();
+    size_t consumed = 0;
+
+    while (consumed < m_loadQueue.size()) {
+        const ChunkCoord c = m_loadQueue[consumed++];
+        if (chunks.find(c) == chunks.end()) {
+            loadChunk(c.first, c.second, lua);
+            if (elapsedMs(start) >= m_loadBudgetMs) break;
+        }
+    }
+
+    m_loadQueue.erase(m_loadQueue.begin(),
+                      m_loadQueue.begin() + static_cast<std::ptrdiff_t>(consumed));
+}
+
 void World::update(const glm::vec3& playerPos, sol::state& lua) {
     ensureLuaSeeded(lua);
 
     const int pcx = floorDiv(static_cast<int>(std::floor(playerPos.x)), CHUNK_WIDTH);
     const int pcz = floorDiv(static_cast<int>(std::floor(playerPos.z)), CHUNK_WIDTH);
+    const ChunkCoord playerChunk{pcx, pcz};
 
-    // Collect missing chunks in the render radius, nearest first.
-    std::vector<std::pair<int, int>> missing;
-    for (int dx = -m_renderDistance; dx <= m_renderDistance; ++dx) {
-        for (int dz = -m_renderDistance; dz <= m_renderDistance; ++dz) {
-            const std::pair<int, int> coord{pcx + dx, pcz + dz};
-            if (chunks.find(coord) == chunks.end()) {
-                missing.push_back(coord);
-            }
-        }
-    }
-    auto distSq = [pcx, pcz](const std::pair<int, int>& c) {
-        const int dx = c.first - pcx;
-        const int dz = c.second - pcz;
-        return dx * dx + dz * dz;
-    };
-    std::sort(missing.begin(), missing.end(),
-              [&](const auto& a, const auto& b) { return distSq(a) < distSq(b); });
-
-    const int toLoad = std::min<int>(kMaxChunkLoadsPerFrame, static_cast<int>(missing.size()));
-    for (int i = 0; i < toLoad; ++i) {
-        loadChunk(missing[i].first, missing[i].second, lua);
+    if (m_queueDirty || playerChunk != m_playerChunk) {
+        m_playerChunk = playerChunk;
+        m_queueDirty = false;
+        rebuildLoadQueue();
     }
 
+    loadQueuedChunks(lua);
     unloadDistantChunks(pcx, pcz);
     processMeshQueue();
 }
 
 void World::unloadDistantChunks(int playerChunkX, int playerChunkZ) {
-    // Small hysteresis band so chunks at the edge don't thrash in and out.
-    const int limit = m_renderDistance + 2;
+    const int limit = m_renderDistance + kUnloadMargin;
 
     for (auto it = chunks.begin(); it != chunks.end();) {
         const int cx = it->first.first;
@@ -213,8 +298,9 @@ void World::unloadDistantChunks(int playerChunkX, int playerChunkZ) {
         const int dz = cz - playerChunkZ;
 
         if (std::max(std::abs(dx), std::abs(dz)) > limit) {
-            unlinkChunk(cx, cz);          // clear neighbor pointers first
-            m_meshQueue.erase({cx, cz});
+            unlinkChunk(cx, cz);                 // clear neighbor pointers before destroying
+            m_meshQueue.erase(ChunkCoord{cx, cz});
+            m_firstUpload.erase(ChunkCoord{cx, cz});
             it = chunks.erase(it);
         } else {
             ++it;
@@ -222,16 +308,25 @@ void World::unloadDistantChunks(int playerChunkX, int playerChunkZ) {
     }
 }
 
+// Rebuilds meshes nearest-first until the mesh budget runs out.
 void World::processMeshQueue() {
-    int budget = kMaxMeshRebuildsPerFrame;
-    auto it = m_meshQueue.begin();
-    while (it != m_meshQueue.end() && budget > 0) {
-        auto chunkIt = chunks.find(*it);
-        if (chunkIt != chunks.end()) {
-            chunkIt->second->generateMeshData();
-            --budget;
+    if (m_meshQueue.empty()) return;
+
+    std::vector<ChunkCoord> order(m_meshQueue.begin(), m_meshQueue.end());
+    const ChunkCoord p = m_playerChunk;
+    std::sort(order.begin(), order.end(),
+              [p](const ChunkCoord& a, const ChunkCoord& b) {
+                  return chunkDist2(a, p) < chunkDist2(b, p);
+              });
+
+    const auto start = Clock::now();
+    for (const ChunkCoord& c : order) {
+        m_meshQueue.erase(c);
+        auto it = chunks.find(c);
+        if (it != chunks.end()) {
+            it->second->generateMeshData();
         }
-        it = m_meshQueue.erase(it);
+        if (elapsedMs(start) >= m_meshBudgetMs) break;
     }
 }
 
@@ -250,12 +345,10 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
                                 static_cast<float>(m_seed % 100000) * 0.001f);
     }
 
-    chunks[{chunkX, chunkZ}] = chunk;
-
-    // Connect to loaded neighbors so border faces are culled against real blocks.
+    chunks[ChunkCoord{chunkX, chunkZ}] = chunk;
     linkChunk(chunkX, chunkZ);
 
-    // The new chunk and its neighbors need (re)meshing.
+    // The new chunk and its neighbors need (re)meshing so border faces cull correctly.
     markMeshDirty(chunkX, chunkZ);
     markMeshDirty(chunkX - 1, chunkZ);
     markMeshDirty(chunkX + 1, chunkZ);
@@ -264,146 +357,167 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
 }
 
 // ---------------------------------------------------------------------------
-// Fluids
+// Upload, fade, and draw
 // ---------------------------------------------------------------------------
-
-void World::updateFluids() {
-    if (m_waterId == 0) {
-        auto& registry = BlockRegistry::getInstance();
-        m_waterId = registry.getBlockId("water");
-        m_flowingWaterId = registry.getBlockId("flowing_water");
-        if (m_flowingWaterId == 0) m_flowingWaterId = m_waterId;
-    }
-    if (m_waterId == 0) return;
-
-    struct FluidChange {
-        glm::ivec3 pos;
-        uint8_t id;
-    };
-    std::vector<FluidChange> pending;
-    pending.reserve(kMaxFluidUpdatesPerTick);
-
-    // Collect first, apply second, so spreading this tick doesn't cascade.
-    for (const auto& [coord, chunk] : chunks) {
-        const int baseX = coord.first * CHUNK_WIDTH;
-        const int baseZ = coord.second * CHUNK_WIDTH;
-
-        for (int lx = 0; lx < CHUNK_WIDTH && pending.size() < kMaxFluidUpdatesPerTick; ++lx)
-        for (int lz = 0; lz < CHUNK_WIDTH && pending.size() < kMaxFluidUpdatesPerTick; ++lz)
-        for (int y = 1; y < CHUNK_HEIGHT && pending.size() < kMaxFluidUpdatesPerTick; ++y) {
-            const uint8_t id = chunk->getBlock(lx, y, lz);
-            if (id != m_waterId && id != m_flowingWaterId) continue;
-
-            const glm::ivec3 below{baseX + lx, y - 1, baseZ + lz};
-            // Only flow into air in a loaded chunk; unloaded space is not air.
-            if (chunkAt(below) && getBlockAt(below) == 0) {
-                pending.push_back({below, m_flowingWaterId});
-            }
-        }
-    }
-
-    for (const auto& change : pending) {
-        ChunkMesh* chunk = chunkAt(change.pos);
-        if (!chunk) continue;
-        chunk->setBlockWithMeta(positiveMod(change.pos.x, CHUNK_WIDTH), change.pos.y,
-                                positiveMod(change.pos.z, CHUNK_WIDTH), change.id, 0);
-        markBlockChanged(change.pos);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Upload and draw
-// ---------------------------------------------------------------------------
-
-void World::render(GLuint shaderProgram) const {
-    this->upload();
-    this->draw(shaderProgram, glm::vec3(0.0f, 0.0f, 0.0f));
-}
-
-void World::render(GLuint shaderProgram, glm::vec3 viewPos) const {
-    this->upload();
-    this->draw(shaderProgram, viewPos);
-}
 
 void World::upload() const {
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = Clock::now();
 
-    for (const auto& [coord, chunk] : chunks) {
+    for (const auto& entry : chunks) {
+        const auto& chunk = entry.second;
         if (!chunk->meshReadyForUpload || !chunk->isDirty) continue;
-
-        const double elapsedMs = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-        if (elapsedMs >= kMaxUploadMs) break;
+        if (elapsedMs(start) >= m_uploadBudgetMs) break;
 
         chunk->uploadMesh();
+
+        // Start the fade-in the first time this chunk's mesh reaches the GPU.
+        if (m_firstUpload.find(entry.first) == m_firstUpload.end()) {
+            m_firstUpload.emplace(entry.first, Clock::now());
+        }
     }
 }
 
-void World::draw(GLuint shaderProgram, glm::vec3 viewPos) const {
-    // Sorted far to near.
-    const auto sortedLocs = getDrawOrderChunkLocations(viewPos);
-    const GLint modelLoc = glGetUniformLocation(shaderProgram, "model");
+// 0 at the moment a chunk first appears, rising to 1 over kChunkFadeSeconds.
+float World::chunkFade(const ChunkCoord& c) const {
+    const auto it = m_firstUpload.find(c);
+    if (it == m_firstUpload.end()) return 1.0f;
+    const float t = elapsedMs(it->second) / (kChunkFadeSeconds * 1000.0f);
+    return std::clamp(t, 0.0f, 1.0f);
+}
 
-    auto setModel = [modelLoc](const std::pair<int, int>& loc) {
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(
-            loc.first * CHUNK_WIDTH, 0.0f, loc.second * CHUNK_WIDTH));
+// Opaque pass nearest-first (early depth rejection). Transparent pass farthest-first.
+void World::drawList(GLuint shaderProgram, std::vector<Visible>& list) const {
+    std::sort(list.begin(), list.end(),
+              [](const Visible& a, const Visible& b) { return a.dist2 < b.dist2; });
+
+    const GLint modelLoc = glGetUniformLocation(shaderProgram, "model");
+    const GLint fadeLoc  = glGetUniformLocation(shaderProgram, "u_ChunkFade");
+
+    auto setChunkUniforms = [modelLoc, fadeLoc](const Visible& v) {
+        const glm::mat4 model = glm::translate(glm::mat4(1.0f), v.origin);
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+        glUniform1f(fadeLoc, v.fade);
     };
 
-    // PASS 1: OPAQUE TERRAIN (includes alpha-cutout plants), near to far.
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
-
-    for (auto it = sortedLocs.rbegin(); it != sortedLocs.rend(); ++it) {
-        const auto& chunk = chunks.at(*it);
-        if (chunk->opaqueVertexCount > 0 && chunk->opaqueVAO != 0) {
-            setModel(*it);
-            chunk->drawOpaque();
+    for (const Visible& v : list) {
+        if (v.mesh->opaqueVertexCount > 0 && v.mesh->opaqueVAO != 0) {
+            setChunkUniforms(v);
+            v.mesh->drawOpaque();
         }
     }
 
-    // PASS 2: TRANSPARENT (water, glass), far to near. Depth writes off.
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    for (const auto& loc : sortedLocs) {
-        const auto& chunk = chunks.at(loc);
-        if (chunk->transparentVertexCount > 0 && chunk->transparentVAO != 0) {
-            setModel(loc);
-            chunk->drawTransparent();
+    for (auto it = list.rbegin(); it != list.rend(); ++it) {
+        if (it->mesh->transparentVertexCount > 0 && it->mesh->transparentVAO != 0) {
+            setChunkUniforms(*it);
+            it->mesh->drawTransparent();
         }
     }
-
     glDepthMask(GL_TRUE);
 }
 
-std::vector<std::pair<int, int>> World::getDrawOrderChunkLocations(glm::vec3 viewPos) const {
-    using Coord = std::pair<int, int>;
+void World::render(GLuint shaderProgram, const glm::mat4& viewProj, const glm::vec3& eye) const {
+    upload();
 
-    std::vector<Coord> locs;
-    locs.reserve(chunks.size());
-    for (const auto& [coord, _] : chunks) {
-        locs.push_back(coord);
+    const Frustum frustum = makeFrustum(viewProj);
+    std::vector<Visible> list;
+    list.reserve(chunks.size());
+
+    for (const auto& entry : chunks) {
+        ChunkMesh* mesh = entry.second.get();
+        if (mesh->opaqueVertexCount == 0 && mesh->transparentVertexCount == 0) continue;
+
+        const glm::vec3 boxMin = originOf(entry.first);
+        const glm::vec3 boxMax = boxMin + glm::vec3(static_cast<float>(CHUNK_WIDTH),
+                                                    static_cast<float>(CHUNK_HEIGHT),
+                                                    static_cast<float>(CHUNK_WIDTH));
+        if (!boxInFrustum(frustum, boxMin, boxMax)) continue;
+
+        const glm::vec3 center = (boxMin + boxMax) * 0.5f;
+        const glm::vec3 d = center - eye;
+        list.push_back(Visible{mesh, boxMin, glm::dot(d, d), chunkFade(entry.first)});
     }
 
-    const float half = CHUNK_WIDTH * 0.5f;
-    auto distSq = [&viewPos, half](const Coord& c) {
-        const float dx = c.first * CHUNK_WIDTH + half - viewPos.x;
-        const float dz = c.second * CHUNK_WIDTH + half - viewPos.z;
-        return dx * dx + dz * dz;
-    };
-
-    std::sort(locs.begin(), locs.end(),
-              [&distSq](const Coord& a, const Coord& b) { return distSq(a) > distSq(b); });
-    return locs;
+    drawList(shaderProgram, list);
 }
 
-// Stub: block highlighting is not implemented yet.
+void World::render(GLuint shaderProgram) const {
+    upload();
+
+    std::vector<Visible> list;
+    list.reserve(chunks.size());
+    for (const auto& entry : chunks) {
+        ChunkMesh* mesh = entry.second.get();
+        if (mesh->opaqueVertexCount == 0 && mesh->transparentVertexCount == 0) continue;
+        list.push_back(Visible{mesh, originOf(entry.first), 0.0f, chunkFade(entry.first)});
+    }
+
+    drawList(shaderProgram, list);
+}
+
 void World::renderBlockHighlight(const glm::ivec3& /*blockPos*/,
                                  const glm::mat4& /*view*/,
                                  const glm::mat4& /*proj*/) const {}
+
+// ---------------------------------------------------------------------------
+// Fluids: only water near a change is simulated
+// ---------------------------------------------------------------------------
+
+void World::resolveFluidIds() {
+    if (m_waterId != 0) return;
+    auto& registry = BlockRegistry::getInstance();
+    m_waterId = registry.getBlockId("water");
+    m_flowingWaterId = registry.getBlockId("flowing_water");
+    if (m_flowingWaterId == 0) m_flowingWaterId = m_waterId;
+}
+
+// Water in the changed cell or its neighbors may now flow, so add it to the active set.
+void World::noteFluidChange(const glm::ivec3& loc) {
+    resolveFluidIds();
+    if (m_waterId == 0) return;
+
+    for (const auto& o : kFluidOffsets) {
+        const glm::ivec3 p(loc.x + o[0], loc.y + o[1], loc.z + o[2]);
+        const uint8_t id = getBlockAt(p);
+        if (id != 0 && (id == m_waterId || id == m_flowingWaterId)) {
+            m_activeFluids.insert(p);
+        }
+    }
+}
+
+void World::updateFluids() {
+    resolveFluidIds();
+    if (m_waterId == 0 || m_activeFluids.empty()) return;
+
+    std::vector<glm::ivec3> toFill;
+    int budget = kMaxFluidUpdatesPerTick;
+    auto it = m_activeFluids.begin();
+
+    while (it != m_activeFluids.end() && budget > 0) {
+        const glm::ivec3 p = *it;
+        it = m_activeFluids.erase(it);
+        --budget;
+
+        const uint8_t id = getBlockAt(p);
+        if (id != m_waterId && id != m_flowingWaterId) continue;
+        if (p.y <= 0) continue;
+
+        const glm::ivec3 below(p.x, p.y - 1, p.z);
+        if (chunkAt(below) && getBlockAt(below) == 0) {
+            toFill.push_back(below);
+        }
+    }
+
+    // Applied after the scan so one tick doesn't cascade down the whole column.
+    for (const glm::ivec3& b : toFill) {
+        setBlockAt(b, m_flowingWaterId);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Block and metadata access
@@ -425,6 +539,7 @@ void World::setBlockAt(const glm::ivec3& loc, uint8_t blockId) {
     chunk->setBlock(positiveMod(loc.x, CHUNK_WIDTH), loc.y,
                     positiveMod(loc.z, CHUNK_WIDTH), blockId);
     markBlockChanged(loc);
+    noteFluidChange(loc);
 }
 
 uint8_t World::getMetadataAt(const glm::ivec3& loc) const {
