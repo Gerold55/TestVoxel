@@ -177,39 +177,6 @@ function generate_oak_tree(chunk, x, y, z)
     end
 end
 
-function generate_swamp_tree(world_x, world_y, world_z)
-    local wood_id = (engine.get_block_id("log_oak") ~= 0 and engine.get_block_id("log_oak")) or 5
-    local leaves_id = (engine.get_block_id("leaves_oak") ~= 0 and engine.get_block_id("leaves_oak")) or 6
-
-    local trunk_height = 5 + math.floor(get_rand(world_x, world_z, 3.1) * 2)
-
-    for h = 0, trunk_height - 1 do
-        local ty = world_y + h
-        if ty < 256 then
-            engine.set_block(world_x, ty, world_z, wood_id)
-        end
-    end
-
-    local leaf_start = world_y + trunk_height - 3
-    for ly = 0, 3 do
-        local current_y = leaf_start + ly
-        local radius = (ly == 0 or ly == 3) and 2 or 3
-
-        for lx = -radius, radius do
-            for lz = -radius, radius do
-                if not (math.abs(lx) == radius and math.abs(lz) == radius) then
-                    local bx, by, bz = world_x + lx, current_y, world_z + lz
-                    if by >= 0 and by < 256 then
-                        if engine.get_block_name(bx, by, bz) == "air" then
-                            engine.set_block(bx, by, bz, leaves_id)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
 function generate_birch_tree(chunk, x, y, z)
     local wood_id = (engine.get_block_id("log_birch") ~= 0 and engine.get_block_id("log_birch")) or 5
     local leaves_id = (engine.get_block_id("leaves_birch") ~= 0 and engine.get_block_id("leaves_birch")) or 6
@@ -282,7 +249,6 @@ function generate_cattails(chunk, lx, start_y, lz)
     local top_y = start_y + 1
 
     if top_y < 256 then
-        -- Bottom stem inside water: Apply metadata bit 0 (meta = 1) for water-logging flag
         if chunk.set_block_with_meta then
             chunk:set_block_with_meta(lx, bottom_y, lz, cattail_id, 1)
         else
@@ -292,12 +258,10 @@ function generate_cattails(chunk, lx, start_y, lz)
             end
         end
         
-        -- Exposed flower head above water level
         chunk:set_block(lx, top_y, lz, cattail_top_id)
     end
 end
 
--- Modular Dry-Land Reeds Helper
 local function try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
     if surface_y + 4 >= 256 then return end
 
@@ -319,11 +283,9 @@ local function try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
     end
 end
 
--- Modular Submerged Cattails Helper
 local function try_generate_cattails(chunk, lx, lz, world_x, world_z, surface_y, sea_level, continentalness)
     local water_depth = math.floor(sea_level) - surface_y
     
-    -- Only place in shallow 1-block deep water so 2-tall cattails project 1 block above water
     if water_depth ~= 1 then return end
     if continentalness < -0.3 then return end
 
@@ -345,7 +307,6 @@ local function try_generate_cattails(chunk, lx, lz, world_x, world_z, surface_y,
     if is_near_bank then
         local cattail_rand = get_rand(world_x, world_z, 11.2)
         if cattail_rand < 0.25 then
-            -- Place starting directly inside the water layer at surface_y + 1
             generate_cattails(chunk, lx, surface_y + 1, lz)
         end
     end
@@ -371,7 +332,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     local heights = {}
     local water_mask = {}
 
-    -- Pass 1: Compute heightmap & water locations
     for lx = 0, 15 do
         heights[lx] = {}
         water_mask[lx] = {}
@@ -386,7 +346,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
         end
     end
 
-    -- Pass 2: Place terrain blocks & flora
     for lx = 0, 15 do
         for lz = 0, 15 do
             local world_x = chunk_x * 16 + lx
@@ -396,7 +355,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
             local surface_y = heights[lx][lz]
             local is_water_body = water_mask[lx][lz]
 
-            -- Continuous Minecraft Biome Classification
             local is_desert = (temp > 0.68 and hum < 0.35)
             local is_swamp = (hum > 0.55 and temp >= 0.35 and c > -0.25)
 
@@ -427,7 +385,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 end
             end
 
-            -- Build column down to bedrock
             for ly = 0, surface_y do
                 if ly == 0 then
                     chunk:set_block(lx, ly, lz, bedrock_id)
@@ -444,7 +401,6 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 end
             end
 
-            -- Fill water bodies
             if is_water_body then
                 for wy = surface_y + 1, math.floor(sea_level) do
                     if wy < 256 then
@@ -452,13 +408,11 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                     end
                 end
 
-                -- --- SUBMERGED CATTAILS ALONG BANKS ---
                 if lx >= 1 and lx <= 14 and lz >= 1 and lz <= 14 then
                     try_generate_cattails(chunk, lx, lz, world_x, world_z, surface_y, sea_level, c)
                 end
             end
 
-            -- --- SURFACE FLORA ---
             if not is_water_body and surface_y >= math.floor(sea_level) and lx >= 1 and lx <= 14 and lz >= 1 and lz <= 14 then
                 local flora_rand = get_rand(world_x, world_z, 1.1)
 
@@ -480,17 +434,8 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                         end
                     end
 
-                    -- Shoreline Reeds Check
                     if surface_y == math.floor(sea_level) then
                         try_generate_reeds(chunk, lx, lz, world_x, world_z, surface_y)
-                    end
-
-                    -- Swamp Oak Trees
-                    if lx >= 2 and lx <= 13 and lz >= 2 and lz <= 13 then
-                        local tree_rand = get_rand(world_x, world_z, 3.3)
-                        if tree_rand < 0.018 and surface_y + 8 < 256 then
-                            generate_swamp_tree(world_x, surface_y + 1, world_z)
-                        end
                     end
 
                 elseif not is_desert and top_block ~= sand_id then
@@ -538,4 +483,4 @@ function generate_chunk(chunk, chunk_x, chunk_z)
     end
 end
 
-print("[Mapgen] Loaded Minecraft-Style Blended Biomes with 2-Tall Waterlogged Cattails successfully.")
+print("[Mapgen] Loaded Minecraft-Style Blended Biomes successfully.")

@@ -17,7 +17,7 @@ BlockRegistry::BlockRegistry() {
     airBlock.isSelectable = false;
     airBlock.hasGravity = false;
     airBlock.in_creative = false; // Air should never be in creative inventory
-    
+
     registerBlock(airBlock);
 }
 
@@ -36,16 +36,16 @@ void BlockRegistry::registerBlockFromLua(uint8_t id, const std::string& name, gl
     prop.defaultTint = tint;
 
     if (options.valid()) {
-        if (options["transparent"].is<bool>()) prop.isTransparent = options["transparent"].get<bool>();
-        if (options["walkable"].is<bool>()) prop.isWalkable = options["walkable"].get<bool>();
-        if (options["selectable"].is<bool>()) prop.isSelectable = options["selectable"].get<bool>();
-        if (options["gravity"].is<bool>()) prop.hasGravity = options["gravity"].get<bool>();
-        if (options["in_creative"].is<bool>()) {
-            prop.in_creative = options["in_creative"].get<bool>();
-        }
-        if (options["pattern"].is<std::string>()) prop.pattern = options["pattern"].get<std::string>();
+        if (options["transparent"].is<bool>())    prop.isTransparent = options["transparent"].get<bool>();
+        if (options["cutout"].is<bool>())         prop.isCutout      = options["cutout"].get<bool>();
+        if (options["walkable"].is<bool>())       prop.isWalkable    = options["walkable"].get<bool>();
+        if (options["selectable"].is<bool>())     prop.isSelectable  = options["selectable"].get<bool>();
+        if (options["gravity"].is<bool>())        prop.hasGravity    = options["gravity"].get<bool>();
+        if (options["in_creative"].is<bool>())    prop.in_creative   = options["in_creative"].get<bool>();
+        if (options["pattern"].is<std::string>()) prop.pattern       = options["pattern"].get<std::string>();
     }
 
+    // Must come after every field is set, because registerBlock stores a copy.
     registerBlock(prop);
 }
 
@@ -53,7 +53,22 @@ const BlockProperty& BlockRegistry::getBlock(uint8_t id) const {
     if (id < blocks.size()) {
         return blocks[id];
     }
-    static BlockProperty dummy{0, "air", glm::vec3(1.0f), {}, true, false, false, false, false, "cube"};
+
+    // Fallback for unknown IDs. Named fields, so the order of members in
+    // BlockProperty can't cause a type mismatch.
+    static const BlockProperty dummy = [] {
+        BlockProperty p;
+        p.id = 0;
+        p.name = "air";
+        p.defaultTint = glm::vec3(1.0f);
+        p.isTransparent = true;
+        p.isWalkable = false;
+        p.isSelectable = false;
+        p.hasGravity = false;
+        p.in_creative = false;
+        p.pattern = "cube";
+        return p;
+    }();
     return dummy;
 }
 

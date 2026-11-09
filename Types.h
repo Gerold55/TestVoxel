@@ -35,6 +35,7 @@ struct BlockProperty {
     glm::vec3 defaultTint = glm::vec3(1.0f);
     FaceDefinition faces[6]; // 0: +X, 1: -X, 2: +Y (Top), 3: -Y (Bottom), 4: +Z, 5: -Z
     bool isTransparent = false;
+    bool isCutout = false;   // Alpha-tested (leaves, plants): opaque pass, shader discards transparent texels
     bool isWalkable = true;
     bool isSelectable = true;
     bool hasGravity = false; // Enabled for falling blocks like sand and gravel
