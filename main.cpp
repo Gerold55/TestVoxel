@@ -13,6 +13,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -30,11 +31,14 @@
 #include "Lighting.h"
 #include "Skybox.h"
 #include "Model.h"
+#include "Clouds.h"
+#include "Fog.h"
+#include "ParticleSystem.h"
 
 namespace fs = std::filesystem;
 
 namespace {
-  constexpr Dimensions2D baseResolution{1920, 1080};
+    constexpr Dimensions2D baseResolution{1920, 1080};
 }
 
 std::string g_CurrentModPath = "";
@@ -45,8 +49,11 @@ FontRenderer* g_FontRenderer = nullptr;
 ChatSystem* g_ChatSystem = nullptr;
 LightingSystem* g_LightingSystem = nullptr;
 Skybox* g_Skybox = nullptr;
+Clouds* g_Clouds = nullptr;
 World* g_WorldInstance = nullptr;
+ParticleSystem* g_ParticleSystem = nullptr;
 float g_FieldOfView = 70.0f;
+FogSettings g_Fog;
 
 enum class GameState {
     MENU,
@@ -215,15 +222,25 @@ GLuint loadStandardTexture(const std::string& path) {
         if (!p.empty() && fs::exists(p)) {
             finalPath = fs::absolute(p).string();
             found = true;
+            std::cout << "[Texture Success] Loaded UI texture from: " << finalPath << std::endl;
             break;
         }
     }
-    if (!found) return 0;
+    if (!found) {
+        std::cout << "[Texture Error] Could not find UI texture: " << path << std::endl;
+        return 0;
+    }
 
     int width, height, nrChannels;
-    stbi_set_flip_vertically_on_load(false);
+    // UI textures require vertical flipping in OpenGL screen space
+    stbi_set_flip_vertically_on_load(true); 
     unsigned char* data = stbi_load(finalPath.c_str(), &width, &height, &nrChannels, 4);
-    if (!data) return 0;
+    stbi_set_flip_vertically_on_load(false); // Reset back for voxel blocks
+
+    if (!data) {
+        std::cout << "[Texture Error] Failed to decode image: " << finalPath << std::endl;
+        return 0;
+    }
 
     GLuint texID;
     glGenTextures(1, &texID);
@@ -410,13 +427,19 @@ struct PointLight {
 uniform int u_NumPointLights;
 uniform PointLight u_PointLights[16];
 
+uniform int   u_FogEnabled;
+uniform int   u_FogExp;
+uniform float u_FogStart;
+uniform float u_FogEnd;
+uniform float u_FogDensity;
+uniform vec3  u_FogColor;
+
 void main() {
     vec4 finalColor = vec4(TintColor, 1.0);
 
     if (BaseLayer >= 0.0) {
         vec2 animatedUV = TexCoord;
 
-        // Safely animate translucent liquid UVs without altering physics geometry
         if (TintColor.b > TintColor.r && TintColor.b > TintColor.g && BaseLayer > 0.0 && u_IsGUI == 0) {
             animatedUV.x += sin(u_Time * 1.2f + WorldPos.z * 0.5f) * 0.02f;
             animatedUV.y += u_Time * 0.08f;
@@ -442,16 +465,19 @@ void main() {
         return;
     }
 
-    vec3 dayLightColor = vec3(1.0f, 0.98f, 0.92f);
-    vec3 sunsetLightColor = vec3(1.0f, 0.62f, 0.32f);
-    vec3 nightLightColor = vec3(0.35f, 0.5f, 0.75f);
+    // Minecraft Classic Lighting Tones
+    vec3 dayLightColor = vec3(1.02f, 1.0f, 0.95f);
+    vec3 sunsetLightColor = vec3(1.05f, 0.68f, 0.38f);
+    vec3 nightLightColor = vec3(0.4f, 0.52f, 0.78f);
 
     vec3 currentSunLightColor = mix(sunsetLightColor, dayLightColor, clamp(u_SunDir.y + 0.15f, 0.0f, 1.0f));
     if (u_SunDir.y < 0.0f) {
         currentSunLightColor = mix(sunsetLightColor, nightLightColor, clamp(-u_SunDir.y * 2.0f, 0.0f, 1.0f));
     }
 
-    vec3 shadedColor = finalColor.rgb * LightIntensity * currentSunLightColor;
+    // Ambient floor to imitate Minecraft ambient occlusion
+    float adjustedLighting = max(LightIntensity, 0.35f);
+    vec3 shadedColor = finalColor.rgb * adjustedLighting * currentSunLightColor;
 
     vec3 pointLightContribution = vec3(0.0f);
     for(int i = 0; i < u_NumPointLights && i < 16; i++) {
@@ -465,20 +491,18 @@ void main() {
     shadedColor += finalColor.rgb * pointLightContribution;
 
     float dist = length(FragPos);
-    float fogStart = 180.0f;
-    float fogEnd = 256.0f;
-    float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0f, 1.0f);
-
-    vec3 dayFog = vec3(0.55f, 0.78f, 0.92f);
-    vec3 sunsetFog = vec3(0.82f, 0.48f, 0.3f);
-    vec3 nightFog = vec3(0.04f, 0.06f, 0.12f);
-
-    vec3 fogColor = mix(sunsetFog, dayFog, clamp(u_SunDir.y + 0.2f, 0.0f, 1.0f));
-    if (u_SunDir.y < 0.0f) {
-        fogColor = mix(sunsetFog, nightFog, clamp(-u_SunDir.y * 2.0f, 0.0f, 1.0f));
+    float fogFactor = 1.0;
+    if (u_FogEnabled == 1) {
+        if (u_FogExp == 1) {
+            float d = dist * u_FogDensity;
+            fogFactor = exp(-d * d);
+        } else {
+            fogFactor = clamp((u_FogEnd - dist) / max(u_FogEnd - u_FogStart, 0.001), 0.0, 1.0);
+            fogFactor = pow(fogFactor, 1.2f);
+        }
     }
 
-    vec3 finalRgb = mix(fogColor, shadedColor, fogFactor);
+    vec3 finalRgb = mix(u_FogColor, shadedColor, fogFactor);
     FragColorOut = vec4(finalRgb, finalColor.a);
 }
 )";
@@ -644,6 +668,45 @@ void main() {
 }
 )";
 
+// Textured Particle Shaders
+const char* particleVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec2 aTexCoord;
+layout (location = 3) in float aTextureLayer;
+
+out vec3 ParticleColor;
+out vec2 TexCoord;
+out float TextureLayer;
+
+uniform mat4 view;
+uniform mat4 projection;
+
+void main() {
+    ParticleColor = aColor;
+    TexCoord = aTexCoord;
+    TextureLayer = aTextureLayer;
+    gl_Position = projection * view * vec4(aPos, 1.0);
+}
+)";
+
+const char* particleFragmentShaderSource = R"(
+#version 330 core
+in vec3 ParticleColor;
+in vec2 TexCoord;
+in float TextureLayer;
+
+out vec4 FragColor;
+uniform sampler2DArray textureArray;
+
+void main() {
+    vec4 texColor = texture(textureArray, vec3(TexCoord, TextureLayer));
+    if (texColor.a < 0.1) discard;
+    FragColor = texColor * vec4(ParticleColor, 1.0);
+}
+)";
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     if (width == 0 || height == 0) return;
     glViewport(0, 0, width, height);
@@ -686,6 +749,9 @@ int main() {
         g_LightingSystem = new LightingSystem();
         g_Skybox = new Skybox();
         g_Skybox->init();
+        g_Clouds = new Clouds();
+        g_Clouds->init();
+        g_ParticleSystem = new ParticleSystem();
 
         g_FontRenderer->init("fonts/default.ttf");
 
@@ -815,6 +881,11 @@ int main() {
         glAttachShader(modelShaderProgram, compileShader(GL_FRAGMENT_SHADER, modelFragmentShaderSource));
         glLinkProgram(modelShaderProgram);
 
+        GLuint particleShaderProgram = glCreateProgram();
+        glAttachShader(particleShaderProgram, compileShader(GL_VERTEX_SHADER, particleVertexShaderSource));
+        glAttachShader(particleShaderProgram, compileShader(GL_FRAGMENT_SHADER, particleFragmentShaderSource));
+        glLinkProgram(particleShaderProgram);
+
         lua.new_usertype<Bone>("Bone",
             "set_rotation", [](Bone& b, float x, float y, float z) { b.rotation = glm::vec3(x, y, z); },
             "get_rotation", [](Bone& b) { return std::make_tuple(b.rotation.x, b.rotation.y, b.rotation.z); },
@@ -860,6 +931,16 @@ int main() {
             if (g_Hotbar) g_Hotbar->selectedTextureID = loadStandardTexture(path);
         };
 
+        // Expose particle system to Lua
+        auto particleLuaTable = lua.create_named_table("particles");
+        particleLuaTable["spawn"] = [](float x, float y, float z, const std::string& blockName) {
+            if (!g_ParticleSystem) return;
+            uint8_t id = BlockRegistry::getInstance().getBlockId(blockName);
+            if (id == 0) return;
+            float texLayer = static_cast<float>(BlockRegistry::getInstance().getBlock(id).faces[0].baseLayer);
+            g_ParticleSystem->spawnBreakParticles(glm::vec3(x, y, z), id, texLayer);
+        };
+
         auto skyTable = lua.create_named_table("sky");
         skyTable["set_time"] = [](float time) { if (g_LightingSystem) g_LightingSystem->customTimeOfDay = time; };
         skyTable["get_time"] = []() { return g_LightingSystem ? g_LightingSystem->getTimeOfDay() : 0.0f; };
@@ -885,6 +966,53 @@ int main() {
             return g_LightingSystem ? g_LightingSystem->addPointLight(glm::vec3(x, y, z), glm::vec3(r, g, b), radius, intensity) : -1;
         };
         skyTable["remove_light"] = [](int id) { if (g_LightingSystem) g_LightingSystem->removePointLight(id); };
+
+        auto cloudTable = lua.create_named_table("clouds");
+        cloudTable["set_color"] = [](float r, float g, float b) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.color = glm::vec3(r, g, b); g_Clouds->setSettings(s);
+        };
+        cloudTable["set_night_color"] = [](float r, float g, float b) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.nightColor = glm::vec3(r, g, b); g_Clouds->setSettings(s);
+        };
+        cloudTable["set_height"] = [](float y) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.height = y; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_thickness"] = [](float t) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.thickness = t; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_cell_size"] = [](float c) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.cellSize = c; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_threshold"] = [](float t) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.threshold = t; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_scroll_speed"] = [](float v) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.scrollSpeed = v; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_texture"] = [](const std::string& path) {
+            if (!g_Clouds) return;
+            CloudSettings s = g_Clouds->settings(); s.texturePath = path; g_Clouds->setSettings(s);
+        };
+        cloudTable["set_weather"] = [](const std::string& name, float seconds) {
+            if (g_Clouds) g_Clouds->setWeather(name, seconds);
+        };
+
+        auto fogTable = lua.create_named_table("fog");
+        fogTable["set_enabled"]     = [](bool on) { g_Fog.enabled = on; };
+        fogTable["set_exponential"]  = [](bool on) { g_Fog.exponential = on; };
+        fogTable["set_range"]        = [](float s, float e) { g_Fog.start = s; g_Fog.end = e; };
+        fogTable["set_density"]      = [](float d) { g_Fog.density = d; };
+        fogTable["set_rain_scale"]   = [](float s) { g_Fog.rainScale = glm::clamp(s, 0.0f, 1.0f); };
+        fogTable["set_day_color"]    = [](float r, float g, float b) { g_Fog.dayColor = glm::vec3(r, g, b); };
+        fogTable["set_sunset_color"] = [](float r, float g, float b) { g_Fog.sunsetColor = glm::vec3(r, g, b); };
+        fogTable["set_night_color"]  = [](float r, float g, float b) { g_Fog.nightColor = glm::vec3(r, g, b); };
 
         auto engineTable = lua.create_named_table("engine");
         engineTable["register_block"] = &registerBlockFromLua;
@@ -951,19 +1079,49 @@ int main() {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         };
 
+        // --- Mod loading ---
         std::vector<std::string> modSearchPaths = { "mods", "../mods", "../../mods", "games/" + g_ActiveGameFolder + "/mods" };
+
+        std::vector<fs::path> modFiles;
+        std::set<std::string> initFolders;
+
         for (const auto& searchPath : modSearchPaths) {
             std::string resolvedPath = searchPath;
             if (!fs::exists(resolvedPath) && fs::exists("../../" + searchPath)) resolvedPath = "../../" + searchPath;
-            if (fs::exists(resolvedPath)) {
-                for (const auto& entry : fs::recursive_directory_iterator(resolvedPath)) {
-                    if (entry.is_regular_file() && entry.path().extension().string() == ".lua") {
-                        g_CurrentModPath = entry.path().parent_path().string();
-                        lua["g_CurrentModPath"] = g_CurrentModPath;
-                        try { lua.script_file(entry.path().string()); } catch (...) {}
-                    }
+            if (!fs::exists(resolvedPath)) continue;
+
+            for (const auto& entry : fs::recursive_directory_iterator(resolvedPath)) {
+                if (!entry.is_regular_file() || entry.path().extension() != ".lua") continue;
+                if (entry.path().filename() == "init.lua") {
+                    initFolders.insert(entry.path().parent_path().string());
                 }
+                modFiles.push_back(entry.path());
             }
+        }
+
+        auto isInsideInitFolder = [&initFolders](const fs::path& file) {
+            for (fs::path p = file.parent_path(); ; p = p.parent_path()) {
+                if (initFolders.count(p.string())) return true;
+                if (p.empty() || p == p.parent_path()) return false;
+            }
+        };
+
+        auto runModFile = [&](const fs::path& file) {
+            g_CurrentModPath = file.parent_path().string();
+            lua["g_CurrentModPath"] = g_CurrentModPath;
+            try {
+                lua.script_file(file.string());
+            } catch (const std::exception& e) {
+                std::cerr << "[Mod] Failed to load " << file.string() << ": " << e.what() << std::endl;
+            }
+        };
+
+        for (const auto& file : modFiles) {
+            if (file.filename() == "init.lua") runModFile(file);
+        }
+        for (const auto& file : modFiles) {
+            if (file.filename() == "init.lua" || isInsideInitFolder(file)) continue;
+            runModFile(file);
         }
 
         lua.new_usertype<ChunkMesh>("Chunk",
@@ -1039,6 +1197,11 @@ int main() {
 
             glfwPollEvents();
 
+            try {
+                sol::function onUpdate = lua["on_update"];
+                if (onUpdate.valid()) onUpdate(deltaTime);
+            } catch (...) {}
+
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
             if (height == 0) height = 1;
@@ -1055,6 +1218,10 @@ int main() {
                     }
                     world.update(player.position, lua);
                     player.update(deltaTime, world, window, lua);
+
+                    if (g_ParticleSystem) {
+                        g_ParticleSystem->update(deltaTime);
+                    }
 
                     try {
                         sol::function updateAnimFunc = lua["update_player_animation"];
@@ -1099,7 +1266,12 @@ int main() {
                                 scytheFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name);
                             }
                         } else {
+                            float texLayer = static_cast<float>(targetProp.faces[0].baseLayer);
                             world.setBlockAt(hitPos, 0);
+
+                            if (g_ParticleSystem) {
+                                g_ParticleSystem->spawnBreakParticles(glm::vec3(hitPos), targetBlockId, texLayer);
+                            }
                         }
                     }
                 }
@@ -1151,8 +1323,61 @@ int main() {
             int moonPhase = g_LightingSystem->getMoonPhase();
 
             if (g_CurrentGameState == GameState::PLAYING) {
+                const glm::vec3 fogCol = fogColorForSun(g_Fog, sunDir.y);
+                const float fogEnd   = effectiveFogEnd(g_Fog, g_LightingSystem->weatherRainIntensity);
+                const float fogStart = effectiveFogStart(g_Fog, fogEnd);
+
                 // --- RENDER SKYBOX ---
                 g_Skybox->render(view, proj, sunDir.y);
+
+                // --- SUN & MOON ---
+                glDepthMask(GL_FALSE);
+                glUseProgram(sunProgram);
+
+                glm::vec3 sunWorldPos = player.position + (sunDir * 80.0f);
+                glm::mat4 sunModel = glm::translate(glm::mat4(1.0f), sunWorldPos);
+                sunModel[0][0] = view[0][0]; sunModel[0][1] = view[1][0]; sunModel[0][2] = view[2][0];
+                sunModel[1][0] = view[0][1]; sunModel[1][1] = view[1][1]; sunModel[1][2] = view[2][1];
+                sunModel[2][0] = view[0][2]; sunModel[2][1] = view[1][2]; sunModel[2][2] = view[2][2];
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(sunModel));
+
+                if (g_LightingSystem->sunTextureID != 0) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, g_LightingSystem->sunTextureID);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
+                } else {
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
+                }
+
+                glBindVertexArray(sunVAO);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+                glm::vec3 moonDir = -sunDir;
+                glm::vec3 moonWorldPos = player.position + (moonDir * 80.0f);
+                glm::mat4 moonModel = glm::translate(glm::mat4(1.0f), moonWorldPos);
+                moonModel[0][0] = view[0][0]; moonModel[0][1] = view[1][0]; moonModel[0][2] = view[2][0];
+                moonModel[1][0] = view[0][1]; moonModel[1][1] = view[1][1]; moonModel[1][2] = view[2][1];
+                moonModel[2][0] = view[0][2]; moonModel[2][1] = view[1][2]; moonModel[2][2] = view[2][2];
+                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(moonModel));
+
+                GLuint activeMoonTex = g_LightingSystem->moonTextureIDs[moonPhase] != 0
+                    ? g_LightingSystem->moonTextureIDs[moonPhase]
+                    : g_LightingSystem->moonTextureIDs[0];
+                if (activeMoonTex != 0) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, activeMoonTex);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
+                } else {
+                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
+                }
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+                glBindVertexArray(0);
+                glDepthMask(GL_TRUE);
 
                 // --- RENDER WORLD ---
                 glUseProgram(shaderProgram);
@@ -1163,6 +1388,13 @@ int main() {
                 glUniform1f(glGetUniformLocation(shaderProgram, "u_Time"), static_cast<float>(glfwGetTime()));
                 glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
                 glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+
+                glUniform1i(glGetUniformLocation(shaderProgram, "u_FogEnabled"), g_Fog.enabled ? 1 : 0);
+                glUniform1i(glGetUniformLocation(shaderProgram, "u_FogExp"), g_Fog.exponential ? 1 : 0);
+                glUniform1f(glGetUniformLocation(shaderProgram, "u_FogStart"), fogStart);
+                glUniform1f(glGetUniformLocation(shaderProgram, "u_FogEnd"), fogEnd);
+                glUniform1f(glGetUniformLocation(shaderProgram, "u_FogDensity"), g_Fog.density);
+                glUniform3f(glGetUniformLocation(shaderProgram, "u_FogColor"), fogCol.r, fogCol.g, fogCol.b);
 
                 const auto& pointLights = g_LightingSystem->getPointLights();
                 glUniform1i(glGetUniformLocation(shaderProgram, "u_NumPointLights"), static_cast<int>(pointLights.size()));
@@ -1182,6 +1414,18 @@ int main() {
 
                 // --- PASS 1: TERRAIN ---
                 g_WorldInstance->render(shaderProgram);
+
+                // --- RENDER TEXTURED PARTICLES ---
+                if (g_ParticleSystem) {
+                    g_ParticleSystem->render(view, proj, particleShaderProgram, g_TextureArrayID);
+                }
+
+                // --- CLOUDS ---
+                g_Clouds->update(deltaTime);
+                g_Clouds->render(view, proj, player.position,
+                                 static_cast<float>(glfwGetTime()),
+                                 sunDir.y,
+                                 fogCol);
 
                 // --- RENDER 3D ANIMATED MODEL PASS ---
                 glUseProgram(modelShaderProgram);
@@ -1233,7 +1477,7 @@ int main() {
                             -0.5f, -0.5f, -0.5f, -0.5f, -0.5f,  0.5f,
                              0.5f, -0.5f, -0.5f,  0.5f, -0.5f,  0.5f,
                              0.5f,  0.5f, -0.5f,  0.5f,  0.5f,  0.5f,
-                            -0.5f,  0.5f, -0.5f, -0.5f,  0.5f, -0.5f
+                            -0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f
                         };
                         glGenVertexArrays(1, &boxVAO);
                         glGenBuffers(1, &boxVBO);
@@ -1252,49 +1496,6 @@ int main() {
                     glEnable(GL_CULL_FACE);
                     glEnable(GL_BLEND);
                 }
-
-                // --- RENDER SUN & MOON ---
-                glUseProgram(sunProgram);
-                glm::vec3 sunWorldPos = player.position + (sunDir * 80.0f);
-                glm::mat4 sunModel = glm::translate(glm::mat4(1.0f), sunWorldPos);
-                sunModel[0][0] = view[0][0]; sunModel[0][1] = view[1][0]; sunModel[0][2] = view[2][0];
-                sunModel[1][0] = view[0][1]; sunModel[1][1] = view[1][1]; sunModel[1][2] = view[2][1];
-                sunModel[2][0] = view[0][2]; sunModel[2][1] = view[1][2]; sunModel[2][2] = view[2][2];
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(sunModel));
-
-                if (g_LightingSystem->sunTextureID != 0) {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, g_LightingSystem->sunTextureID);
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
-                } else {
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
-                }
-
-                glBindVertexArray(sunVAO);
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-                glm::vec3 moonDir = -sunDir;
-                glm::vec3 moonWorldPos = player.position + (moonDir * 80.0f);
-                glm::mat4 moonModel = glm::translate(glm::mat4(1.0f), moonWorldPos);
-                moonModel[0][0] = view[0][0]; moonModel[0][1] = view[1][0]; moonModel[0][2] = view[2][0];
-                moonModel[1][0] = view[0][1]; moonModel[1][1] = view[1][1]; moonModel[1][2] = view[2][1];
-                moonModel[2][0] = view[0][2]; moonModel[2][1] = view[1][2]; moonModel[2][2] = view[2][2];
-                glUniformMatrix4fv(glGetUniformLocation(sunProgram, "model"), 1, GL_FALSE, glm::value_ptr(moonModel));
-
-                GLuint activeMoonTex = g_LightingSystem->moonTextureIDs[moonPhase] != 0 ? g_LightingSystem->moonTextureIDs[moonPhase] : g_LightingSystem->moonTextureIDs[0];
-                if (activeMoonTex != 0) {
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, activeMoonTex);
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_Texture"), 0);
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 1);
-                } else {
-                    glUniform1i(glGetUniformLocation(sunProgram, "u_HasTexture"), 0);
-                }
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
 
                 // --- UI & OVERLAYS ---
                 glDisable(GL_DEPTH_TEST);
@@ -1345,6 +1546,8 @@ int main() {
         delete g_ChatSystem;
         delete g_LightingSystem;
         delete g_Skybox;
+        delete g_Clouds;
+        delete g_ParticleSystem;
     } catch (const std::exception& e) {
         std::cerr << "\n[CRITICAL EXCEPTION]: " << e.what() << std::endl;
         system("pause");

@@ -6,8 +6,24 @@
 #include <iostream>
 #include <sstream>
 
+namespace {
+    constexpr size_t kMaxInputLength = 200;
+}
+
+// Opens the chat from a key press. The character for the same press arrives
+// right after, so T's character is suppressed. "/" is not suppressed, so the
+// character callback adds it once.
+void ChatSystem::openChat(GLFWwindow* window, int triggerKey) {
+    if (isOpen) return;
+    isOpen = true;
+    currentInput.clear();
+    suppressNextChar = (triggerKey == GLFW_KEY_T);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+}
+
 void ChatSystem::toggleChat(GLFWwindow* window) {
     isOpen = !isOpen;
+    suppressNextChar = false;
     if (isOpen) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     } else {
@@ -25,34 +41,42 @@ void ChatSystem::addMessage(const std::string& message) {
 
 void ChatSystem::handleCharInput(unsigned int codepoint) {
     if (!isOpen) return;
-    if (codepoint >= 32 && codepoint < 127) {
+
+    if (suppressNextChar) {
+        suppressNextChar = false;
+        return;
+    }
+
+    if (codepoint >= 32 && codepoint < 127 && currentInput.size() < kMaxInputLength) {
         currentInput += static_cast<char>(codepoint);
     }
 }
 
 void ChatSystem::handleKeyInput(int key, int scancode, int action, int mods, GLFWwindow* window) {
     if (!isOpen) return;
+    if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
 
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        if (key == GLFW_KEY_BACKSPACE && !currentInput.empty()) {
-            currentInput.pop_back();
-        } 
-        else if (key == GLFW_KEY_ENTER) {
-            if (!currentInput.empty()) {
-                addMessage("> " + currentInput);
-                executeCommand(currentInput);
-                currentInput.clear();
-            }
-            toggleChat(window);
+    // Any key press while the chat is open means the trigger character has
+    // already been handled, or it never arrives. Either way, stop suppressing.
+    suppressNextChar = false;
+
+    if (key == GLFW_KEY_BACKSPACE) {
+        if (!currentInput.empty()) currentInput.pop_back();
+    } else if (key == GLFW_KEY_ENTER) {
+        if (!currentInput.empty()) {
+            addMessage("> " + currentInput);
+            executeCommand(currentInput);
+            currentInput.clear();
         }
-        else if (key == GLFW_KEY_ESCAPE) {
-            toggleChat(window);
-        }
+        toggleChat(window);
+    } else if (key == GLFW_KEY_ESCAPE) {
+        toggleChat(window);
     }
 }
 
 void ChatSystem::executeCommand(const std::string& cmd) {
     if (!cmd.empty() && cmd[0] == '/') {
+        // Placeholder: command dispatch goes here (e.g. forwarding to Lua).
         addMessage("[System] Command executed: " + cmd);
     } else {
         addMessage(cmd);
@@ -62,7 +86,7 @@ void ChatSystem::executeCommand(const std::string& cmd) {
 void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight) {
     if (!fontRenderer || fontShader == 0) return;
 
-    // If chat is open, render current input prompt at the bottom
+    // If chat is open, render the input prompt at the bottom
     if (isOpen) {
         std::string displayLine = "> " + currentInput + "_";
         fontRenderer->renderText(fontShader, displayLine, -0.95f, -0.85f, 0.05f,

@@ -53,6 +53,7 @@ add_executable(VoxelEngine
     CaveGenerator.h
     Model.cpp
     Model.h
+    Clouds.cpp
     deps/glad.c
 )
 

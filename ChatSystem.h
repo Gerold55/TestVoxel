@@ -15,8 +15,9 @@ public:
     size_t maxHistorySize = 50;
 
     void toggleChat(GLFWwindow* window);
+    void openChat(GLFWwindow* window, int triggerKey);
     void addMessage(const std::string& message);
-    
+
     void handleCharInput(unsigned int codepoint);
     void handleKeyInput(int key, int scancode, int action, int mods, GLFWwindow* window);
 
@@ -25,4 +26,8 @@ public:
 
 private:
     void executeCommand(const std::string& cmd);
+
+    // True when the next character should be ignored because it came from the
+    // key that opened the chat (T).
+    bool suppressNextChar = false;
 };

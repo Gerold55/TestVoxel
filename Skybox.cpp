@@ -32,45 +32,67 @@ void main() {
     vec3 normalizedDir = normalize(FragPos);
     float y = normalizedDir.y;
 
-    // Procedural Minecraft-style sky color gradient based on sun position
-    vec3 dayZenith = vec3(0.35f, 0.58f, 0.95f);
-    vec3 dayHorizon = vec3(0.65f, 0.82f, 0.98f);
+    // Authentic Minecraft-inspired palette
+    vec3 dayZenith    = vec3(0.32f, 0.52f, 0.90f);
+    vec3 dayHorizon   = vec3(0.58f, 0.74f, 0.94f);
     
-    vec3 sunsetZenith = vec3(0.2f, 0.25f, 0.45f);
-    vec3 sunsetHorizon = vec3(0.85f, 0.45f, 0.25f);
+    vec3 sunsetZenith   = vec3(0.12f, 0.15f, 0.32f);
+    vec3 sunsetHorizon  = vec3(0.92f, 0.48f, 0.22f); // Vibrant orange-red sunset glow
+    vec3 sunsetTransition = vec3(0.55f, 0.22f, 0.35f); // Deep purplish twilight band
 
-    vec3 nightZenith = vec3(0.01f, 0.02f, 0.06f);
-    vec3 nightHorizon = vec3(0.05f, 0.08f, 0.18f);
+    vec3 nightZenith  = vec3(0.01f, 0.012f, 0.035f);
+    vec3 nightHorizon = vec3(0.03f, 0.04f, 0.09f);
 
     vec3 topColor;
-    vec3 bottomColor;
+    vec3 horizonColor;
 
     float sunFactor = clamp(u_SunPosY, -1.0f, 1.0f);
 
+    // Blending based on Sun height position
     if (sunFactor > 0.0f) {
-        // Daytime to Sunset blend
-        float t = clamp(sunFactor * 2.0f - 1.0f, 0.0f, 1.0f); // 0 at sunset, 1 at noon
-        topColor = mix(sunsetZenith, dayZenith, t);
-        bottomColor = mix(sunsetHorizon, dayHorizon, t);
+        // Day to Sunset blend
+        float t = clamp(sunFactor * 2.0f - 1.0f, 0.0f, 1.0f); // 0 at horizon/sunset, 1 at noon
+        topColor     = mix(sunsetZenith, dayZenith, t);
+        horizonColor = mix(sunsetHorizon, dayHorizon, t);
     } else {
         // Sunset to Night blend
         float t = clamp((-sunFactor) * 2.0f, 0.0f, 1.0f); // 0 at sunset, 1 at midnight
-        topColor = mix(sunsetZenith, nightZenith, t);
-        bottomColor = mix(sunsetHorizon, nightHorizon, t);
+        topColor     = mix(sunsetZenith, nightZenith, t);
+        horizonColor = mix(sunsetHorizon, nightHorizon, t);
     }
 
-    // Smooth vertical gradient
-    float factor = clamp(y * 0.5f + 0.5f, 0.0f, 1.0f);
-    vec3 skyColor = mix(bottomColor, topColor, pow(factor, 0.7f));
+    // Minecraft vertical gradient curve (smoother zenith falloff)
+    float altitude = clamp(y, 0.0f, 1.0f);
+    vec3 skyColor = mix(horizonColor, topColor, pow(altitude, 0.55f));
 
-    // Simple procedural stars at night
-    if (sunFactor < -0.1f && y > 0.1f) {
-        float starNoise = fract(sin(dot(normalizedDir.xz * 150.0f, vec2(12.9898, 78.233))) * 43758.5453f);
-        if (starNoise > 0.985f) {
-            float starAlpha = (starNoise - 0.985f) / 0.015f;
-            float nightIntensity = clamp(-sunFactor * 1.5f, 0.0f, 1.0f);
-            skyColor += vec3(starAlpha * nightIntensity);
+    // Add a warm/cool horizon haze band around y = 0 mimicking atmospheric scattering
+    float horizonGlow = exp(-abs(y) * 4.0f);
+    if (sunFactor > -0.3f && sunFactor < 0.3f) {
+        // Enhance sunset band intensity when the sun is near the horizon
+        float sunsetIntensity = 1.0f - abs(sunFactor) * 3.33f;
+        skyColor += sunsetTransition * horizonGlow * max(0.0f, sunsetIntensity);
+    } else {
+        // General ambient horizon brightness lift
+        skyColor += horizonColor * horizonGlow * 0.25f;
+    }
+
+    // Procedural Stars visible during night and deep twilight
+    if (y > 0.0f && sunFactor < 0.15f) {
+        // Scale coordinate space for star density
+        vec2 starUV = normalizedDir.xz / (y + 0.1f);
+        float starNoise = fract(sin(dot(starUV * 180.0f, vec2(12.9898f, 78.233f))) * 43758.5453f);
+        
+        if (starNoise > 0.988f) {
+            float starAlpha = (starNoise - 0.988f) / 0.012f;
+            // Fade stars in smoothly as night approaches
+            float nightIntensity = clamp((-sunFactor + 0.15f) * 2.5f, 0.0f, 1.0f);
+            skyColor += vec3(starAlpha * nightIntensity * y); // Slightly dimmer near the horizon
         }
+    }
+
+    // Pitch black below the horizon plane
+    if (y < 0.0f) {
+        skyColor = mix(skyColor, nightHorizon, clamp(-y * 2.0f, 0.0f, 1.0f));
     }
 
     FragColor = vec4(skyColor, 1.0f);
