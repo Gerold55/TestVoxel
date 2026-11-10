@@ -1,9 +1,13 @@
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include "ChatSystem.h"
 #include "FontRenderer.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
