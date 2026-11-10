@@ -78,9 +78,9 @@ static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
                                   prop.name.find("gravel") != std::string::npos ||
                                   prop.name.find("bedrock") != std::string::npos);
 
-    if (tab == 0) return true;      
-    if (tab == 1) return isNature;      
-    if (tab == 2) return isBuilding;    
+    if (tab == 0) return true;
+    if (tab == 1) return isNature;
+    if (tab == 2) return isBuilding;
     
     return false;
 }
