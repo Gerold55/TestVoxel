@@ -27,9 +27,7 @@ bool FontRenderer::init(const std::string& fontPath) {
     std::vector<std::string> searchPaths = {
         fontPath,
         "../" + fontPath,
-        "../../" + fontPath,
-        "games/craft_and_ruin/" + fontPath,
-        "../../games/craft_and_ruin/" + fontPath
+        "../../" + fontPath
     };
 
     #if defined(_WIN32)

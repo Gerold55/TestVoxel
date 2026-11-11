@@ -7,10 +7,10 @@
 
 namespace {
 
-// Water top sits 1/16 below the block top. Every side face uses the same
-// height so the surface is flat.
-constexpr float kWaterSurfaceDrop = 0.0625f;
-constexpr float kPlantInset       = 0.15f;
+constexpr float kPlantInset = 0.15f;
+
+// Water surface height for source water and waterlogged plants, 1 pixel below the block top.
+constexpr float kWaterSurfaceY = 15.0f / 16.0f;
 
 // Face order matches the neighbor slots: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
 constexpr float kFaceShading[6] = { 0.8f, 0.8f, 1.0f, 0.5f, 0.7f, 0.7f };
@@ -268,7 +268,20 @@ void ChunkMesh::generateMeshData() {
         const float fx = static_cast<float>(x);
         const float fy = static_cast<float>(y);
         const float fz = static_cast<float>(z);
-        const float topY = renderingWater ? (fy + 1.0f - kWaterSurfaceDrop) : (fy + 1.0f);
+
+        // Water top height. Source water and waterlogged plants sit 1 pixel below the
+        // block top. Flowing water (levels 1-7) slopes down from there.
+        float topY = fy + 1.0f;
+        if (renderingWater) {
+            topY = fy + kWaterSurfaceY;
+            if (isWaterProp(selfProp)) {
+                const uint8_t meta = getMetadata(x, y, z);
+                const int waterLevel = meta & 0x07;
+                if (waterLevel > 0 && waterLevel < 8) {
+                    topY = fy + (8 - waterLevel) / 8.0f;
+                }
+            }
+        }
 
         for (int f = 0; f < 6; ++f) {
             const int nx = x + kFaceOffset[f][0];
@@ -340,10 +353,10 @@ void ChunkMesh::generateMeshData() {
 void ChunkMesh::uploadMesh() {
     if (!meshReadyForUpload) return;
 
-    opaqueVertexCount      = static_cast<GLsizei>(cpuOpaqueVertices.size());
+    opaqueVertexCount       = static_cast<GLsizei>(cpuOpaqueVertices.size());
     transparentVertexCount = static_cast<GLsizei>(cpuTransparentVertices.size());
 
-    uploadBuffer(opaqueVAO,      opaqueVBO,      cpuOpaqueVertices);
+    uploadBuffer(opaqueVAO,       opaqueVBO,       cpuOpaqueVertices);
     uploadBuffer(transparentVAO, transparentVBO, cpuTransparentVertices);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);

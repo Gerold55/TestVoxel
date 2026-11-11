@@ -60,6 +60,7 @@ add_executable(VoxelEngine
     Clouds.cpp
     Clouds.h
     Fog.h
+    Fog.cpp
     deps/glad.c
 )
 

@@ -37,6 +37,7 @@ public:
     float padding = 8.0f;
     float posX = 0.0f;
     float posY = 0.0f;
+    float textureScale = 1.0f;   // multiplier for the bar and selection textures
 
     GLuint customTextureID = 0;   // Hotbar background strip texture loaded from Lua
     GLuint selectedTextureID = 0; // Active slot highlight frame texture loaded from Lua

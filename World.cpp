@@ -559,3 +559,41 @@ void World::setMetadataAt(const glm::ivec3& loc, uint8_t meta) {
                        positiveMod(loc.z, CHUNK_WIDTH), meta);
     markBlockChanged(loc);
 }
+
+// ---------------------------------------------------------------------------
+// Loading readiness
+// ---------------------------------------------------------------------------
+
+// Fraction of chunks within `radius` of pos that are generated, meshed, and uploaded.
+float World::areaLoadProgress(const glm::vec3& pos, int radius) const {
+    const int pcx = floorDiv(static_cast<int>(std::floor(pos.x)), CHUNK_WIDTH);
+    const int pcz = floorDiv(static_cast<int>(std::floor(pos.z)), CHUNK_WIDTH);
+
+    int total = 0;
+    int done = 0;
+    for (int dx = -radius; dx <= radius; ++dx) {
+        for (int dz = -radius; dz <= radius; ++dz) {
+            ++total;
+            const ChunkCoord c{pcx + dx, pcz + dz};
+            const auto it = chunks.find(c);
+            if (it == chunks.end()) continue;                           // not generated yet
+            if (m_meshQueue.count(c)) continue;                         // waiting to be meshed
+            const auto& chunk = it->second;
+            if (chunk->meshReadyForUpload && chunk->isDirty) continue;  // waiting for upload
+            ++done;
+        }
+    }
+    return total > 0 ? static_cast<float>(done) / static_cast<float>(total) : 1.0f;
+}
+
+// First air block above the highest walkable block in this column, or -1 if none is loaded.
+int World::groundHeightAt(int x, int z) const {
+    for (int y = CHUNK_HEIGHT - 1; y >= 0; --y) {
+        const uint8_t id = getBlockAt(glm::ivec3(x, y, z));
+        if (id == 0) continue;
+        if (BlockRegistry::getInstance().getBlock(id).isWalkable) {
+            return y + 1;
+        }
+    }
+    return -1;
+}

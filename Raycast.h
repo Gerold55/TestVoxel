@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <cmath>
 #include "World.h"
+#include "Block.h" // Make sure Block.h is included for BlockRegistry
 
 struct RaycastResult {
     bool hit = false;
@@ -35,11 +36,16 @@ inline RaycastResult raycastBlock(const glm::vec3& rayOrigin, const glm::vec3& r
 
     while (distance <= maxDistance) {
         uint8_t blockId = world.getBlockAt({x, y, z});
-        if (blockId != 0) { // Hit solid block
-            result.hit = true;
-            result.blockPos = glm::ivec3(x, y, z);
-            result.faceNormal = normal;
-            return result;
+        if (blockId != 0) {
+            const auto& prop = BlockRegistry::getInstance().getBlock(blockId);
+            
+            // Only register a hit if the block is selectable (skips water, air, etc.)
+            if (prop.isSelectable) {
+                result.hit = true;
+                result.blockPos = glm::ivec3(x, y, z);
+                result.faceNormal = normal;
+                return result;
+            }
         }
 
         if (tMaxX < tMaxY) {
