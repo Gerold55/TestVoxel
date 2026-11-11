@@ -73,14 +73,14 @@ static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
                      prop.name.find("reed") != std::string::npos);
 
     bool isBuilding = !isNature && (prop.name.find("stone") != std::string::npos ||
-                                   prop.name.find("dirt") != std::string::npos ||
-                                   prop.name.find("log") != std::string::npos ||
-                                   prop.name.find("gravel") != std::string::npos ||
-                                   prop.name.find("bedrock") != std::string::npos);
+                                  prop.name.find("dirt") != std::string::npos ||
+                                  prop.name.find("log") != std::string::npos ||
+                                  prop.name.find("gravel") != std::string::npos ||
+                                  prop.name.find("bedrock") != std::string::npos);
 
-    if (tab == 0) return true;       
-    if (tab == 1) return isNature;      
-    if (tab == 2) return isBuilding;    
+    if (tab == 0) return true;
+    if (tab == 1) return isNature;
+    if (tab == 2) return isBuilding;
     
     return false;
 }
@@ -448,19 +448,26 @@ void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
         glBindTexture(GL_TEXTURE_2D, customTextureID);
         glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
 
-        float x0 = (px / screenWidth) * 2.0f - 1.0f;
-        float y0 = 1.0f - ((py + actualSlotSize) / screenHeight) * 2.0f;
-        float x1 = ((px + totalWidth) / screenWidth) * 2.0f - 1.0f;
-        float y1 = 1.0f - (py / screenHeight) * 2.0f;
+        float textureAspect = 182.0f / 22.0f;
+        float barHeight = actualSlotSize * 1.25f;
+        float barWidth = barHeight * textureAspect;
+
+        float barX = px - (barWidth - totalWidth) * 0.5f;
+        float barY = py - (barHeight - actualSlotSize) * 0.5f;
+
+        float x0 = (barX / screenWidth) * 2.0f - 1.0f;
+        float y0 = 1.0f - ((barY + barHeight) / screenHeight) * 2.0f;
+        float x1 = ((barX + barWidth) / screenWidth) * 2.0f - 1.0f;
+        float y1 = 1.0f - (barY / screenHeight) * 2.0f;
 
         float quadVerts[] = {
-            x0, y1,  0.0f, 1.0f,
-            x1, y1,  1.0f, 1.0f,
-            x1, y0,  1.0f, 0.0f,
+            x0, y1,  0.0f, 0.0f,
+            x1, y1,  1.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
 
-            x0, y1,  0.0f, 1.0f,
-            x1, y0,  1.0f, 0.0f,
-            x0, y0,  0.0f, 0.0f
+            x0, y1,  0.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+            x0, y0,  0.0f, 1.0f
         };
 
         glBindVertexArray(texQuadVAO);
@@ -481,23 +488,23 @@ void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
         glBindTexture(GL_TEXTURE_2D, selectedTextureID);
         glUniform1i(glGetUniformLocation(texturedUIShader, "u_Texture"), 0);
 
-        float sx = std::round(px + activeSlot * (actualSlotSize + padding));
-        float sy = std::round(py);
-        float border = 4.0f; 
+        float selSize = actualSlotSize * 1.3f;
+        float sx = std::round(px + activeSlot * (actualSlotSize + padding) - (selSize - actualSlotSize) * 0.5f);
+        float sy = std::round(py - (selSize - actualSlotSize) * 0.5f);
 
-        float x0 = ((sx - border) / screenWidth) * 2.0f - 1.0f;
-        float y0 = 1.0f - ((sy + actualSlotSize + border) / screenHeight) * 2.0f;
-        float x1 = ((sx + actualSlotSize + border) / screenWidth) * 2.0f - 1.0f;
-        float y1 = 1.0f - ((sy - border) / screenHeight) * 2.0f;
+        float x0 = (sx / screenWidth) * 2.0f - 1.0f;
+        float y0 = 1.0f - ((sy + selSize) / screenHeight) * 2.0f;
+        float x1 = ((sx + selSize) / screenWidth) * 2.0f - 1.0f;
+        float y1 = 1.0f - (sy / screenHeight) * 2.0f;
 
         float highlightVerts[] = {
-            x0, y1,  0.0f, 1.0f,
-            x1, y1,  1.0f, 1.0f,
-            x1, y0,  1.0f, 0.0f,
+            x0, y1,  0.0f, 0.0f,
+            x1, y1,  1.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
 
-            x0, y1,  0.0f, 1.0f,
-            x1, y0,  1.0f, 0.0f,
-            x0, y0,  0.0f, 0.0f
+            x0, y1,  0.0f, 0.0f,
+            x1, y0,  1.0f, 1.0f,
+            x0, y0,  0.0f, 1.0f
         };
 
         glBindVertexArray(texQuadVAO);
@@ -512,7 +519,7 @@ void Hotbar::renderSlots(GLuint uiShader, GLuint texturedUIShader) {
         glBindVertexArray(0);
     }
 
-    if (slotVAO != 0) {
+    if (slotVAO != 0 && customTextureID == 0) {
         glUseProgram(uiShader);
         glBindVertexArray(slotVAO);
 

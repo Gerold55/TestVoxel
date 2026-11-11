@@ -129,43 +129,33 @@ inline bool isPlantLike(const BlockProperty& p) {
     return p.pattern == "plantlike";
 }
 
-// Alpha-tested blocks (leaves, plants). They draw in the opaque pass and the
-// fragment shader discards transparent texels.
 inline bool isCutout(const BlockProperty& p) {
     return p.isCutout;
 }
 
-// Transparent, non-fluid blocks (plants, glass, ...) can hold water when
-// their metadata bit 0 is set.
 inline bool canWaterlog(const BlockProperty& p) {
     return (isPlantLike(p) || p.isTransparent) && !isWaterProp(p);
 }
 
-// A block that fully hides the face behind it: opaque and not alpha-tested.
 inline bool isOpaqueSolid(const BlockProperty& p) {
     return !p.isTransparent && !isPlantLike(p) && !isCutout(p);
 }
 
-// Decides whether a face of `self` pointing at `nb` should be skipped.
-// Each family has its own rules:
-//   water  - hidden by water, waterlogged blocks, and solids
-//   leaves - hidden only by solids; leaves never hide each other, so canopies stay dense
-//   glass  - hidden by solids and identical glass
-//   solid  - hidden by solids only
+// Robust face culling rules preventing clipping artifacts between water and waterlogged foliage
 bool isFaceHidden(const BlockProperty& self, uint8_t selfId, bool renderingWater,
                   const BlockProperty& nb, uint8_t nbId, bool nbWaterlogged) {
-    if (isPlantLike(nb)) return false;                  // plants never hide faces
+    if (isPlantLike(nb) && !nbWaterlogged) return false; // dry plants do not occlude
 
     if (renderingWater) {
         return isWaterProp(nb) || nbWaterlogged || isOpaqueSolid(nb);
     }
     if (isCutout(self)) {
-        return isOpaqueSolid(nb);                       // leaves: only solids hide them
+        return isOpaqueSolid(nb);
     }
     if (self.isTransparent) {
-        return isOpaqueSolid(nb) || nbId == selfId;     // glass: solids and glass-to-glass
+        return isOpaqueSolid(nb) || nbId == selfId;
     }
-    return isOpaqueSolid(nb);                           // solid cubes
+    return isOpaqueSolid(nb);
 }
 
 } // namespace
@@ -179,8 +169,8 @@ ChunkMesh::ChunkMesh() : opaqueVAO(0), opaqueVBO(0), opaqueVertexCount(0),
 }
 
 ChunkMesh::~ChunkMesh() {
-    if (opaqueVAO != 0)      glDeleteVertexArrays(1, &opaqueVAO);
-    if (opaqueVBO != 0)      glDeleteBuffers(1, &opaqueVBO);
+    if (opaqueVAO != 0)       glDeleteVertexArrays(1, &opaqueVAO);
+    if (opaqueVBO != 0)       glDeleteBuffers(1, &opaqueVBO);
     if (transparentVAO != 0) glDeleteVertexArrays(1, &transparentVAO);
     if (transparentVBO != 0) glDeleteBuffers(1, &transparentVBO);
 }
@@ -202,7 +192,6 @@ uint8_t ChunkMesh::getLocalBlock(int x, int y, int z) const {
 uint8_t ChunkMesh::getBlock(int x, int y, int z) const {
     if (y < 0 || y >= CHUNK_HEIGHT) return 0;
 
-    // Neighbor slots: 0 = +X, 1 = -X, 4 = +Z, 5 = -Z.
     if (x < 0)            return neighbors[1] ? neighbors[1]->getLocalBlock(x + CHUNK_WIDTH, y, z) : 0;
     if (x >= CHUNK_WIDTH) return neighbors[0] ? neighbors[0]->getLocalBlock(x - CHUNK_WIDTH, y, z) : 0;
     if (z < 0)            return neighbors[5] ? neighbors[5]->getLocalBlock(x, y, z + CHUNK_WIDTH) : 0;
@@ -239,7 +228,6 @@ void ChunkMesh::generateMeshData() {
     auto& registry = BlockRegistry::getInstance();
     const uint8_t waterId = registry.getBlockId("water");
 
-    // Plants: two crossed cutout planes, drawn in the opaque pass.
     auto emitPlant = [&](int x, int y, int z, const BlockProperty& prop) {
         const FaceStyle style{
             prop.defaultTint.r, prop.defaultTint.g, prop.defaultTint.b,
@@ -258,14 +246,12 @@ void ChunkMesh::generateMeshData() {
         const float minZ = fz + kPlantInset, maxZ = fz + 1.0f - kPlantInset;
         const float minY = fy, maxY = fy + 1.0f;
 
-        // Diagonal plane 1: (minX,minZ) to (maxX,maxZ)
         const Vertex p1[4] = {
             makeVertex(minX, minY, minZ, 0.0f, 1.0f, style),
             makeVertex(maxX, minY, maxZ, 1.0f, 1.0f, style),
             makeVertex(maxX, maxY, maxZ, 1.0f, 0.0f, style),
             makeVertex(minX, maxY, minZ, 0.0f, 0.0f, style),
         };
-        // Diagonal plane 2: (minX,maxZ) to (maxX,minZ)
         const Vertex p2[4] = {
             makeVertex(minX, minY, maxZ, 0.0f, 1.0f, style),
             makeVertex(maxX, minY, minZ, 1.0f, 1.0f, style),
@@ -277,8 +263,6 @@ void ChunkMesh::generateMeshData() {
         pushDoubleSided(cpuOpaqueVertices, p2);
     };
 
-    // Cube faces. blockId and selfProp describe the block's own definition;
-    // renderProp is what gets drawn (water when waterlogged, otherwise selfProp).
     auto emitCube = [&](int x, int y, int z, uint8_t blockId, const BlockProperty& selfProp,
                         const BlockProperty& renderProp, bool renderingWater) {
         const float fx = static_cast<float>(x);
@@ -322,7 +306,6 @@ void ChunkMesh::generateMeshData() {
                 makeVertex(fv[3][0], fv[3][1], fv[3][2], 0.0f, 0.0f, style),
             };
 
-            // Only true blended blocks (water, glass) go in the transparent pass.
             const bool blended = renderProp.isTransparent && !isCutout(renderProp);
             auto& buf = blended ? cpuTransparentVertices : cpuOpaqueVertices;
             pushQuad(buf, q);
@@ -340,7 +323,7 @@ void ChunkMesh::generateMeshData() {
 
                 if (isPlantLike(prop)) {
                     emitPlant(x, y, z, prop);
-                    if (!waterlogged) continue;   // dry plant: no cube pass
+                    if (!waterlogged) continue;
                 }
 
                 const bool useWater = waterlogged && waterId != 0;
@@ -351,7 +334,7 @@ void ChunkMesh::generateMeshData() {
     }
 
     meshReadyForUpload = true;
-    isDirty = true;   // World::upload() needs this to pick up the new mesh
+    isDirty = true;
 }
 
 void ChunkMesh::uploadMesh() {

@@ -20,8 +20,8 @@ engine.register_block("dirt", 1.0, 1.0, 1.0, "textures/cw_dirt.png", nil, {
     behavior = "solid"
 })
 
--- Grass with top, bottom, and side overlays
-engine.register_block("grass", 0.35, 0.75, 0.25, {
+-- Grass block with a truer, less yellow green tint
+engine.register_block("grass", 120, 200, 85, {
     top    = "textures/cw_grass_top.png",
     bottom = "textures/cw_dirt.png",
     sides  = "textures/cw_dirt.png"
@@ -30,7 +30,8 @@ engine.register_block("grass", 0.35, 0.75, 0.25, {
 }, {
     transparent = false,
     walkable = true,
-    behavior = "solid"
+    behavior = "solid",
+    tint = true
 })
 
 -- Oak Log
@@ -45,7 +46,7 @@ engine.register_block("log_oak", 1.0, 1.0, 1.0, {
 })
 
 -- Oak Leaves
-engine.register_block("leaves_oak", 0.2, 0.8, 0.2, "textures/cw_oak_leaves.png", nil, {
+engine.register_block("leaves_oak", 75, 180, 30, "textures/cw_oak_leaves.png", nil, {
     transparent = true,
     cutout      = true,
     walkable    = true,
@@ -138,7 +139,7 @@ engine.register_block("gravel", 0.5, 0.5, 0.5, "cw_gravel.png", nil, {
 -- --- NEW: Vegetation Blocks ---
 
 -- Short Grass (Cross-plane plantlike pattern with biome tinting)
-engine.register_block("short_grass", 0.35, 0.75, 0.25, "textures/cw_grass.png", nil, {
+engine.register_block("short_grass", 120, 200, 85, "textures/cw_grass.png", nil, {
     transparent = true,
     walkable = false,
     selectable = true,

@@ -53,6 +53,14 @@ add_executable(VoxelEngine
     CaveGenerator.h
     Model.cpp
     Model.h
+    ChatSystem.cpp
+    ChatSystem.h
+    MainMenu.cpp
+    MainMenu.h
+    Clouds.cpp
+    Clouds.h
+    Fog.h
+    Fog.cpp
     deps/glad.c
 )
 
