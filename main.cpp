@@ -1451,7 +1451,9 @@ int main() {
                                     if (targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
                                         replaceTarget = true;
                                     }
-                                    glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
+                                    glm::vec3 placePos = replaceTarget
+                                        ? glm::vec3(rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0))
+                                        : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
                                     world.setBlockAt(glm::ivec3(static_cast<int>(placePos.x), static_cast<int>(placePos.y), static_cast<int>(placePos.z)), selectedBlock);
                                 }
                             }
