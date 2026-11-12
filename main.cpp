@@ -34,6 +34,7 @@
 #include "Model.h"
 #include "Clouds.h"
 #include "Fog.h"
+#include "MainMenu.h"
 
 namespace fs = std::filesystem;
 
@@ -62,10 +63,18 @@ LightingSystem* g_LightingSystem = nullptr;
 Skybox* g_Skybox = nullptr;
 Clouds* g_Clouds = nullptr;
 World* g_WorldInstance = nullptr;
+MainMenu* g_MainMenu = nullptr;
 float g_FieldOfView = 70.0f;
 FogSettings g_Fog;
 UnderwaterSettings g_Underwater;
 float g_UnderwaterBlend = 0.0f;
+
+// Loading screen state
+bool g_SpawnPlaced = false;
+double g_LoadStartTime = 0.0;
+float g_LoadingProgress = 0.0f;
+constexpr int kSpawnReadyRadius = 2;       // chunks around the spawn that must be ready
+constexpr double kLoadTimeoutSec = 30.0;   // start anyway after this long
 
 struct WaterColors {
     glm::vec3 shallow;
@@ -74,6 +83,7 @@ struct WaterColors {
 
 enum class GameState {
     MENU,
+    LOADING,
     PLAYING
 };
 GameState g_CurrentGameState = GameState::MENU;
@@ -90,6 +100,9 @@ GameInfo parseGameConfig(const fs::path& gameDirPath) {
     info.folderName = gameDirPath.filename().string();
 
     fs::path confPath = gameDirPath / "game.conf";
+    if (!fs::exists(confPath)) {
+        confPath = gameDirPath / "mod.conf";
+    }
     if (!fs::exists(confPath)) {
         info.title = info.folderName;
         return info;
@@ -113,7 +126,7 @@ GameInfo parseGameConfig(const fs::path& gameDirPath) {
             val.erase(0, val.find_first_not_of(" \t"));
             val.erase(val.find_last_not_of(" \t") + 1);
 
-            if (key == "title") info.title = val;
+            if (key == "title" || key == "name") info.title = val;
             else if (key == "author") info.author = val;
             else if (key == "description") info.description = val;
         }
@@ -130,7 +143,7 @@ std::vector<GameInfo> getAvailableGames() {
         for (const auto& entry : fs::directory_iterator(gamesDir)) {
             if (entry.is_directory()) {
                 fs::path confPath = entry.path() / "game.conf";
-                if (fs::exists(confPath)) {
+                if (fs::exists(confPath) || fs::exists(entry.path() / "mod.conf")) {
                     games.push_back(parseGameConfig(entry.path()));
                 }
             }
@@ -242,12 +255,19 @@ GLuint loadStandardTexture(const std::string& path) {
             break;
         }
     }
-    if (!found) return 0;
+    if (!found) {
+        std::cerr << "[Texture] NOT FOUND: " << path
+                  << " (also looked in games/" << g_ActiveGameFolder << "/textures/)" << std::endl;
+        return 0;
+    }
 
     int width, height, nrChannels;
     stbi_set_flip_vertically_on_load(false);
     unsigned char* data = stbi_load(finalPath.c_str(), &width, &height, &nrChannels, 4);
-    if (!data) return 0;
+    if (!data) {
+        std::cerr << "[Texture] Failed to decode: " << finalPath << std::endl;
+        return 0;
+    }
 
     GLuint texID;
     glGenTextures(1, &texID);
@@ -261,6 +281,8 @@ GLuint loadStandardTexture(const std::string& path) {
 
     stbi_image_free(data);
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    std::cout << "[Texture] Loaded " << finalPath << " (" << width << "x" << height << ")" << std::endl;
     return texID;
 }
 
@@ -285,7 +307,7 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
         block.isTransparent = props.get_or("transparent", false);
         block.isCutout      = props.get_or("cutout", false);
         block.isWalkable    = props.get_or("walkable", (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red"));
-        block.isSelectable  = props.get_or("selectable", true);
+        block.isSelectable  = props.get_or("selectable", (name != "water" && name != "flowing_water" && name != "air" && name != "short_grass" && name != "flower_red"));
         block.hasGravity    = props.get_or("gravity", false);
         block.pattern       = props.get_or("pattern", std::string("cube"));
         shouldTint          = props.get_or("tint", shouldTint);
@@ -293,6 +315,7 @@ void registerBlockFromLua(const std::string& name, float r, float g, float b, so
         block.isTransparent = (name == "water" || name == "flowing_water" || name == "leaves" || name == "birch_leaves" || name == "short_grass" || name == "flower_red");
         block.isCutout      = (name.find("leaves") != std::string::npos);
         block.isWalkable    = (name != "air" && name != "water" && name != "flowing_water" && name != "short_grass" && name != "flower_red");
+        block.isSelectable  = (name != "water" && name != "flowing_water" && name != "air" && name != "short_grass" && name != "flower_red");
         block.hasGravity    = (name == "sand" || name == "gravel");
         block.pattern       = (name == "short_grass" || name == "flower_red") ? "plantlike" : "cube";
     }
@@ -374,7 +397,7 @@ float underwaterDepth(const World& world, const glm::vec3& eye) {
         top = y;
     }
 
-    const float surfaceY = static_cast<float>(top) + 1.0f - 0.0625f;
+    const float surfaceY = static_cast<float>(top) + 1.0f;
     return glm::max(surfaceY - eye.y, 0.0f);
 }
 
@@ -424,10 +447,6 @@ uniform float u_Time;
 
 void main() {
     vec3 pos = aPos;
-    if (aBaseLayer >= 0.0 && aFaceShading < 0.9f && pos.y - floor(pos.y) > 0.4f) {
-        float wave = sin(u_Time * 3.5f + pos.x + pos.z) * 0.04f;
-        pos.x += wave;
-    }
     TintColor = aTintColor;
     TexCoord = aTexCoord;
     BaseLayer = aBaseLayer;
@@ -747,6 +766,52 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     }
 }
 
+// Draws the loading screen: dark background, title, and a progress bar.
+void drawLoadingScreen(GLuint uiProgram, GLuint fontProgram, float progress, int width, int height) {
+    static GLuint vao = 0, vbo = 0;
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glBindVertexArray(0);
+    }
+
+    auto quad = [&](float x0, float y0, float x1, float y1, glm::vec4 c) {
+        const float v[36] = {
+            x0, y0, c.r, c.g, c.b, c.a,  x1, y0, c.r, c.g, c.b, c.a,  x1, y1, c.r, c.g, c.b, c.a,
+            x0, y0, c.r, c.g, c.b, c.a,  x1, y1, c.r, c.g, c.b, c.a,  x0, y1, c.r, c.g, c.b, c.a
+        };
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glUseProgram(uiProgram);
+    quad(-1.0f, -1.0f, 1.0f, 1.0f, glm::vec4(0.12f, 0.12f, 0.12f, 1.0f));
+    quad(-0.40f, -0.12f, 0.40f, -0.06f, glm::vec4(0.05f, 0.05f, 0.05f, 1.0f));
+    const float fillX = -0.40f + 0.80f * glm::clamp(progress, 0.0f, 1.0f);
+    quad(-0.40f, -0.12f, fillX, -0.06f, glm::vec4(0.35f, 0.75f, 0.35f, 1.0f));
+    glBindVertexArray(0);
+
+    if (g_FontRenderer) {
+        const Dimensions2D screen{width, height};
+        glUseProgram(fontProgram);
+        g_FontRenderer->renderText(fontProgram, "Loading world...",
+                                   width * 0.5f - 120.0f, height * 0.5f + 60.0f,
+                                   1.2f, 1.2f, glm::vec4(1.0f), screen);
+        const int percent = static_cast<int>(glm::clamp(progress, 0.0f, 1.0f) * 100.0f);
+        g_FontRenderer->renderText(fontProgram, std::to_string(percent) + "%",
+                                   width * 0.5f - 20.0f, height * 0.5f - 60.0f,
+                                   0.9f, 0.9f, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f), screen);
+    }
+}
+
 int main() {
     try {
         if (!glfwInit()) return -1;
@@ -777,8 +842,9 @@ int main() {
         g_Skybox->init();
         g_Clouds = new Clouds();
         g_Clouds->init();
+        g_MainMenu = new MainMenu();
 
-        g_FontRenderer->init("fonts/default.ttf");
+        g_FontRenderer->init("fonts/PixeloidSans.ttf");
 
         glfwSetCharCallback(window, [](GLFWwindow* win, unsigned int codepoint) {
             if (g_ChatSystem) g_ChatSystem->handleCharInput(codepoint);
@@ -912,6 +978,9 @@ int main() {
         hotbarTable["set_selected_texture"] = [](std::string path) {
             if (g_Hotbar) g_Hotbar->selectedTextureID = loadStandardTexture(path);
         };
+        hotbarTable["set_texture_scale"] = [](float s) {
+            if (g_Hotbar) g_Hotbar->textureScale = glm::clamp(s, 0.25f, 4.0f);
+        };
 
         auto skyTable = lua.create_named_table("sky");
         skyTable["set_time"] = [](float time) { if (g_LightingSystem) g_LightingSystem->customTimeOfDay = time; };
@@ -977,7 +1046,7 @@ int main() {
         };
 
         auto fogTable = lua.create_named_table("fog");
-        fogTable["set_enabled"]     = [](bool on) { g_Fog.enabled = on; };
+        fogTable["set_enabled"]      = [](bool on) { g_Fog.enabled = on; };
         fogTable["set_exponential"]  = [](bool on) { g_Fog.exponential = on; };
         fogTable["set_range"]        = [](float s, float e) { g_Fog.start = s; g_Fog.end = e; };
         fogTable["set_density"]      = [](float d) { g_Fog.density = d; };
@@ -1034,37 +1103,23 @@ int main() {
         };
         underwaterTable["set_tint_strength"] = [](float s) { g_Underwater.tintStrength = glm::clamp(s, 0.0f, 1.0f); };
 
-        static GLuint menuVAO = 0, menuVBO = 0;
         auto menuTable = lua.create_named_table("menu");
-        menuTable["draw_quad"] = [](float x, float y, float w, float h, float r, float g, float b, float a) {
-            float vertices[] = {
-                x,     y,     r, g, b, a,
-                x + w, y,     r, g, b, a,
-                x + w, y + h, r, g, b, a,
-
-                x,     y,     r, g, b, a,
-                x + w, y + h, r, g, b, a,
-                x,     y + h, r, g, b, a
-            };
-
-            if (menuVAO == 0) {
-                glGenVertexArrays(1, &menuVAO);
-                glGenBuffers(1, &menuVBO);
+        menuTable["get_games"] = [&]() {
+            auto games = getAvailableGames();
+            sol::table t = lua.create_table();
+            int idx = 1;
+            for (const auto& g : games) {
+                sol::table gt = lua.create_table();
+                gt["folder"] = g.folderName;
+                gt["title"] = g.title;
+                gt["author"] = g.author;
+                gt["description"] = g.description;
+                t[idx++] = gt;
             }
-
-            glBindVertexArray(menuVAO);
-            glBindBuffer(GL_ARRAY_BUFFER, menuVBO);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
-
-            GLsizei stride = 6 * sizeof(float);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (void*)0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(2 * sizeof(float)));
-
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-            glBindVertexArray(0);
+            return t;
         };
+        menuTable["get_active_game"] = []() { return g_ActiveGameFolder; };
+        menuTable["set_active_game"] = [](std::string folderName) { g_ActiveGameFolder = folderName; };
 
         auto engineTable = lua.create_named_table("engine");
         engineTable["register_block"] = &registerBlockFromLua;
@@ -1102,26 +1157,6 @@ int main() {
             }
         };
 
-        engineTable["get_games"] = [&]() {
-            auto games = getAvailableGames();
-            sol::table t = lua.create_table();
-            int idx = 1;
-            for (const auto& g : games) {
-                sol::table gt = lua.create_table();
-                gt["folder"] = g.folderName;
-                gt["title"] = g.title;
-                gt["author"] = g.author;
-                gt["description"] = g.description;
-                
-                std::string iconPath = "games/" + g.folderName + "/icon.png";
-                if (!fs::exists(iconPath)) iconPath = "../../games/" + g.folderName + "/icon.png";
-                gt["icon_texture"] = loadStandardTexture(iconPath);
-                
-                t[idx++] = gt;
-            }
-            return t;
-        };
-
         engineTable["get_worlds"] = [&]() {
             auto worlds = getAvailableWorlds();
             sol::table t = lua.create_table();
@@ -1129,18 +1164,16 @@ int main() {
             for (const auto& w : worlds) t[idx++] = w;
             return t;
         };
-        
-        engineTable["get_active_game"] = []() { return g_ActiveGameFolder; };
-        engineTable["set_active_game"] = [](std::string folderName) {
-            g_ActiveGameFolder = folderName;
-        };
-        
+
         engineTable["get_active_world"] = []() { return g_ActiveWorldName; };
         engineTable["set_active_world"] = [](std::string name) { g_ActiveWorldName = name; };
         engineTable["quit"] = [&]() { glfwSetWindowShouldClose(window, true); };
         engineTable["start_game"] = [&]() {
-            g_CurrentGameState = GameState::PLAYING;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            g_CurrentGameState = GameState::LOADING;
+            g_SpawnPlaced = false;
+            g_LoadStartTime = glfwGetTime();
+            g_LoadingProgress = 0.0f;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         };
 
         World world;
@@ -1258,11 +1291,17 @@ int main() {
                 double mx, my;
                 glfwGetCursorPos(win, &mx, &my);
 
-                if (g_CurrentGameState == GameState::MENU) {
-                    try {
-                        sol::function clickMenu = (*ctx->lua)["on_menu_click"];
-                        if (clickMenu.valid()) clickMenu(mx, my, sw, sh);
-                    } catch (...) {}
+                if (g_CurrentGameState == GameState::MENU && g_MainMenu) {
+                    std::string actionResult = g_MainMenu->handleMouseClick(mx, my, sw, sh);
+                    if (actionResult == "play") {
+                        g_CurrentGameState = GameState::LOADING;
+                        g_SpawnPlaced = false;
+                        g_LoadStartTime = glfwGetTime();
+                        g_LoadingProgress = 0.0f;
+                        glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    } else if (actionResult == "quit") {
+                        glfwSetWindowShouldClose(win, true);
+                    }
                 } else if (g_CurrentGameState == GameState::PLAYING && g_Hotbar && g_Hotbar->isCreativeOpen) {
                     g_Hotbar->handleMouseClick(mx, my, sw, sh);
                 }
@@ -1291,6 +1330,39 @@ int main() {
             if (height == 0) height = 1;
 
             bool isCursorDisabled = (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED);
+
+            // --- Loading: stream the spawn area and place the player on the ground.
+            // Physics and gameplay are paused until the area is ready.
+            if (g_CurrentGameState == GameState::LOADING) {
+                world.setLoadBudgetMs(40.0f);
+                world.setMeshBudgetMs(30.0f);
+                world.update(player.position, lua);
+                world.upload();
+
+                const int sx = static_cast<int>(std::floor(player.position.x));
+                const int sz = static_cast<int>(std::floor(player.position.z));
+                const bool timedOut = (glfwGetTime() - g_LoadStartTime) > kLoadTimeoutSec;
+
+                if (!g_SpawnPlaced) {
+                    const int ground = world.groundHeightAt(sx, sz);
+                    if (ground >= 0) {
+                        player.position.y = static_cast<float>(ground);
+                        g_SpawnPlaced = true;
+                    } else if (timedOut) {
+                        player.position.y = 100.0f;
+                        g_SpawnPlaced = true;
+                    }
+                }
+
+                g_LoadingProgress = world.areaLoadProgress(player.position, kSpawnReadyRadius);
+
+                if (g_SpawnPlaced && (g_LoadingProgress >= 1.0f || timedOut)) {
+                    world.setLoadBudgetMs(4.0f);
+                    world.setMeshBudgetMs(4.0f);
+                    g_CurrentGameState = GameState::PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                }
+            }
 
             if (g_CurrentGameState == GameState::PLAYING) {
                 if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
@@ -1340,13 +1412,16 @@ int main() {
                     uint8_t targetBlockId = world.getBlockAt(hitPos);
                     if (targetBlockId != 0) {
                         const auto& targetProp = BlockRegistry::getInstance().getBlock(targetBlockId);
-                        if (activeItemName.find("scythe") != std::string::npos) {
-                            sol::protected_function scytheFunc = lua["on_use_scythe"];
-                            if (scytheFunc.valid()) {
-                                scytheFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name);
+
+                        if (targetProp.isSelectable) {
+                            if (activeItemName.find("scythe") != std::string::npos) {
+                                sol::protected_function scytheFunc = lua["on_use_scythe"];
+                                if (scytheFunc.valid()) {
+                                    scytheFunc(hitPos.x, hitPos.y, hitPos.z, targetProp.name);
+                                }
+                            } else {
+                                world.setBlockAt(hitPos, 0);
                             }
-                        } else {
-                            world.setBlockAt(hitPos, 0);
                         }
                     }
                 }
@@ -1373,10 +1448,12 @@ int main() {
                                 uint8_t selectedBlock = g_Hotbar->getActiveBlockId();
                                 if (selectedBlock != 0) {
                                     bool replaceTarget = false;
-                                    if (targetProp.name == "water" || targetProp.name == "flowing_water" || targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
+                                    if (targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
                                         replaceTarget = true;
                                     }
-                                    glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (rayResult.blockPos + rayResult.faceNormal);
+                                    glm::vec3 placePos = replaceTarget
+                                        ? glm::vec3(rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0))
+                                        : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
                                     world.setBlockAt(glm::ivec3(static_cast<int>(placePos.x), static_cast<int>(placePos.y), static_cast<int>(placePos.z)), selectedBlock);
                                 }
                             }
@@ -1636,20 +1713,19 @@ int main() {
                 glUniform1i(glGetUniformLocation(shaderProgram, "textureArray"), 0);
 
                 g_Hotbar->render3DIcons(shaderProgram, g_TextureArrayID);
-            } else {
+            } else if (g_CurrentGameState == GameState::LOADING) {
                 glDisable(GL_DEPTH_TEST);
-                
+                drawLoadingScreen(uiProgram, fontProgram, g_LoadingProgress, width, height);
+            } else {
                 int sw, sh;
                 glfwGetFramebufferSize(window, &sw, &sh);
                 double mx, my;
                 glfwGetCursorPos(window, &mx, &my);
 
-                glUseProgram(uiProgram);
-
-                try {
-                    sol::function updateMenu = lua["on_menu_update"];
-                    if (updateMenu.valid()) updateMenu(mx, my, sw, sh);
-                } catch (...) {}
+                if (g_MainMenu) {
+                    g_MainMenu->updateAndBuildBuffers(mx, my, sw, sh);
+                    g_MainMenu->render(uiProgram, texturedUIProgram, fontProgram, *g_FontRenderer, sw, sh);
+                }
             }
 
             glfwSwapBuffers(window);
@@ -1664,6 +1740,7 @@ int main() {
         delete g_LightingSystem;
         delete g_Skybox;
         delete g_Clouds;
+        delete g_MainMenu;
     } catch (const std::exception& e) {
         std::cerr << "\n[CRITICAL EXCEPTION]: " << e.what() << std::endl;
         system("pause");

@@ -21,6 +21,16 @@ constexpr size_t kLinesOpen         = 14;
 constexpr double kVisibleSeconds    = 10.0;
 constexpr double kFadeSeconds       = 1.0;
 
+// Pixels reserved at the bottom of the screen for the hotbar (bar height plus its
+// bottom margin and any posY offset). The chat sits above this line.
+constexpr float kHotbarReserve = 115.0f;
+
+constexpr float kInputHeight    = 30.0f;
+constexpr float kLinePixelH     = 24.0f;
+constexpr float kTextInsetX     = 8.0f;
+constexpr float kLineTextDropY  = 8.0f;    // text offset from the top of each log line
+constexpr float kInputTextDropY = 25.0f;   // text offset from the top of the input bar
+
 const glm::vec3 kPlayerColor(1.0f, 1.0f, 1.0f);
 const glm::vec3 kSystemColor(1.0f, 1.0f, 0.6f);
 const glm::vec3 kErrorColor(1.0f, 0.55f, 0.55f);
@@ -279,7 +289,7 @@ void ChatSystem::ensureRectGpu() {
     glGenBuffers(1, &m_rectVBO);
     glBindVertexArray(m_rectVAO);
     glBindBuffer(GL_ARRAY_BUFFER, m_rectVBO);
-    glBufferData(GL_ARRAY_BUFFER, 6 * 6 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 36 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
@@ -287,48 +297,47 @@ void ChatSystem::ensureRectGpu() {
     glBindVertexArray(0);
 }
 
-void ChatSystem::drawRect(float x0, float y0, float x1, float y1, const glm::vec4& color) {
-    const float v[36] = {
-        x0, y0, color.r, color.g, color.b, color.a,
-        x1, y0, color.r, color.g, color.b, color.a,
-        x1, y1, color.r, color.g, color.b, color.a,
-        x0, y0, color.r, color.g, color.b, color.a,
-        x1, y1, color.r, color.g, color.b, color.a,
-        x0, y1, color.r, color.g, color.b, color.a,
-    };
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(m_rectProgram);
-    glBindVertexArray(m_rectVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, m_rectVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
-}
-
 void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight) {
     if (!fontRenderer || fontShader == 0) return;
     ensureRectGpu();
 
+    // Use the framebuffer size for text, since it may differ from the logical size.
+    GLFWwindow* currentWindow = glfwGetCurrentContext();
+    int fbWidth = screenWidth, fbHeight = screenHeight;
+    if (currentWindow) {
+        glfwGetFramebufferSize(currentWindow, &fbWidth, &fbHeight);
+    }
+    const Dimensions2D screen{fbWidth, fbHeight};
+
+    const float W = static_cast<float>(screenWidth);
+    const float H = static_cast<float>(screenHeight);
+
+    const float boxLeft  = W * 0.05f;
+    const float boxWidth = W * 0.90f;
+
+    // The chat's bottom edge sits just above the hotbar.
+    const float chatBottom = H - kHotbarReserve;
+    const float inputTopY  = chatBottom - kInputHeight;
+
+    struct RectTask { float x0, y0, x1, y1; glm::vec4 color; };
+    struct TextTask { std::string text; float x, y; glm::vec4 color; };
+
+    std::vector<RectTask> rectTasks;
+    std::vector<TextTask> textTasks;
+
+    // Pixel rectangle (top-left origin) converted to NDC.
+    auto addRectTask = [&](float px, float py, float pw, float ph, glm::vec4 col) {
+        const float x0 = (px / W) * 2.0f - 1.0f;
+        const float x1 = ((px + pw) / W) * 2.0f - 1.0f;
+        const float y0 = 1.0f - ((py + ph) / H) * 2.0f;
+        const float y1 = 1.0f - (py / H) * 2.0f;
+        rectTasks.push_back({x0, y0, x1, y1, col});
+    };
+
     const double now = glfwGetTime();
-    const Dimensions2D screen{screenWidth, screenHeight};
-
-    float boxLeft = static_cast<float>(screenWidth) * 0.05f;
-    float boxWidth = static_cast<float>(screenWidth) * 0.9f;
-    float boxHeight = 32.0f;
-    float inputBottomY = static_cast<float>(screenHeight) - 100.0f;
-
-    float linePixelHeight = 24.0f;
-    float linesBaseY = inputBottomY;
 
     if (isOpen) {
-        float ndcX0 = (boxLeft / screenWidth) * 2.0f - 1.0f;
-        float ndcX1 = ((boxLeft + boxWidth) / screenWidth) * 2.0f - 1.0f;
-        float ndcY0 = 1.0f - ((inputBottomY + boxHeight) / screenHeight) * 2.0f;
-        float ndcY1 = 1.0f - (inputBottomY / screenHeight) * 2.0f;
-
-        drawRect(ndcX0, ndcY0, ndcX1, ndcY1, glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
+        addRectTask(boxLeft, inputTopY, boxWidth, kInputHeight, glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
 
         const size_t start = m_cursor > kInputVisibleChars ? m_cursor - kInputVisibleChars : 0;
         std::string display = currentInput.substr(start, kInputVisibleChars);
@@ -337,13 +346,11 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
         const bool caretOn = std::fmod(now, 1.0) < 0.5;
         display.insert(caretPos, caretOn ? "_" : " ");
 
-        // Pass scale = 1.0f so font size maps cleanly to pixel units, and place Y near the vertical center of the input box
-        fontRenderer->renderText(fontShader, display, boxLeft + 8.0f, inputBottomY + 22.0f,
-                                 1.0f, 1.0f, glm::vec4(1.0f), screen);
-
-        linesBaseY = inputBottomY - 4.0f;
+        textTasks.push_back({display, boxLeft + kTextInsetX, inputTopY + kInputTextDropY, glm::vec4(1.0f)});
     }
 
+    // Log lines stack upward from the input bar when open, or from the hotbar line when closed.
+    const float baseY = isOpen ? inputTopY : chatBottom;
     const size_t maxLines = isOpen ? kLinesOpen : kLinesClosed;
     size_t row = 0;
 
@@ -358,18 +365,53 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
             }
         }
 
-        float currentLineTop = linesBaseY - static_cast<float>(row + 1) * linePixelHeight;
-        float currentLineBottom = currentLineTop + linePixelHeight - 2.0f;
-
-        float ndcX0 = (boxLeft / screenWidth) * 2.0f - 1.0f;
-        float ndcX1 = ((boxLeft + boxWidth) / screenWidth) * 2.0f - 1.0f;
-        float ndcY0 = 1.0f - (currentLineBottom / screenHeight) * 2.0f;
-        float ndcY1 = 1.0f - (currentLineTop / screenHeight) * 2.0f;
-
+        const float lineTop = baseY - static_cast<float>(row + 1) * kLinePixelH;
         const float bgAlpha = (isOpen ? 0.5f : 0.35f) * alpha;
-        drawRect(ndcX0, ndcY0, ndcX1, ndcY1, glm::vec4(0.0f, 0.0f, 0.0f, bgAlpha));
 
-        fontRenderer->renderText(fontShader, it->text, boxLeft + 8.0f, currentLineTop + 18.0f,
-                                 1.0f, 1.0f, glm::vec4(it->color, alpha), screen);
+        addRectTask(boxLeft, lineTop, boxWidth, kLinePixelH, glm::vec4(0.0f, 0.0f, 0.0f, bgAlpha));
+        textTasks.push_back({it->text, boxLeft + kTextInsetX, lineTop + kLineTextDropY, glm::vec4(it->color, alpha)});
     }
+
+    // Save state we change so the rest of the frame is unaffected.
+    const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean cullWasOn  = glIsEnabled(GL_CULL_FACE);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Phase 1: background rectangles.
+    glUseProgram(m_rectProgram);
+    glBindVertexArray(m_rectVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_rectVBO);
+
+    for (const auto& rect : rectTasks) {
+        const float v[36] = {
+            rect.x0, rect.y0, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+            rect.x1, rect.y0, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+            rect.x1, rect.y1, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+            rect.x0, rect.y0, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+            rect.x1, rect.y1, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+            rect.x0, rect.y1, rect.color.r, rect.color.g, rect.color.b, rect.color.a,
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glBindVertexArray(0);
+
+    // Phase 2: text. FontRenderer takes pixel coordinates, top-left origin.
+    glUseProgram(fontShader);
+
+    const float scaleX = (W > 0.0f) ? static_cast<float>(fbWidth) / W : 1.0f;
+    const float scaleY = (H > 0.0f) ? static_cast<float>(fbHeight) / H : 1.0f;
+
+    for (const auto& task : textTasks) {
+        fontRenderer->renderText(fontShader, task.text,
+                                 task.x * scaleX, task.y * scaleY,
+                                 1.0f, 1.0f, task.color, screen);
+    }
+
+    if (cullWasOn) glEnable(GL_CULL_FACE);
+    if (depthWasOn) glEnable(GL_DEPTH_TEST);
 }

@@ -82,7 +82,7 @@ engine.register_block("water", 0.2, 0.4, 0.9, {
 }, nil, {
     transparent = true,
     walkable = false,
-    selectable = true,
+    selectable = false,
     behavior = "liquid",
     tint = false
 })
@@ -95,7 +95,7 @@ engine.register_block("flowing_water", 0.2, 0.4, 0.9, {
 }, nil, {
     transparent = true,
     walkable = false,
-    selectable = true,
+    selectable = false,
     behavior = "liquid",
     tint = false,
     in_creative = false

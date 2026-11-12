@@ -69,6 +69,14 @@ public:
     size_t pendingLoadCount() const { return m_loadQueue.size(); }
     size_t pendingMeshCount() const { return m_meshQueue.size(); }
 
+    // Fraction (0..1) of chunks within `radius` chunks of pos that are loaded,
+    // meshed, and uploaded. 1.0 means the area is ready to play in.
+    float areaLoadProgress(const glm::vec3& pos, int radius) const;
+
+    // Y coordinate of the first air block above the highest walkable block in
+    // this column. Returns -1 if the column has no loaded ground.
+    int groundHeightAt(int x, int z) const;
+
     // Kept public for compatibility with existing code.
     std::unordered_map<ChunkCoord, std::shared_ptr<ChunkMesh>, PairHash> chunks;
 

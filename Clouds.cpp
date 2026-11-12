@@ -29,9 +29,12 @@ float blockNoise(int x, int z, int cellsPerGroup, int salt) {
 bool isFilled(int x, int z, float threshold) {
     x = wrapCell(x);
     z = wrapCell(z);
-    const float large = blockNoise(x, z, 8, 1);
-    const float small = blockNoise(x, z, 2, 2);
-    return (0.6f * large + 0.4f * small) > threshold;
+    
+    // Classic Minecraft anisotropic scaling: stretch the noise horizontally along X 
+    // using block noise for sharp, crisp voxel edges instead of smooth interpolation.
+    const float large = blockNoise(x * 2, z, 24, 1); 
+    const float small = blockNoise(x, z, 8, 2);  
+    return (0.45f * large + 0.55f * small) > threshold;
 }
 
 void addQuad(std::vector<float>& out,
@@ -82,7 +85,6 @@ CloudSettings lerpSettings(const CloudSettings& a, const CloudSettings& b, float
     r.darken     = glm::mix(a.darken, b.darken, t);
     r.fadeStart  = glm::mix(a.fadeStart, b.fadeStart, t);
     r.fadeEnd    = glm::mix(a.fadeEnd, b.fadeEnd, t);
-    // Geometry values snap at the midpoint so the mesh doesn't morph every frame.
     if (t >= 0.5f) {
         r.height    = b.height;
         r.thickness = b.thickness;
@@ -144,7 +146,9 @@ void main() {
     vec3 lit = base * vShade;
     float dist = distance(vWorld.xz, u_CamPos.xz);
     float fade = clamp((u_FadeEnd - dist) / max(u_FadeEnd - u_FadeStart, 1.0), 0.0, 1.0);
-    FragColor = vec4(mix(u_Fog, lit, fade), 1.0);
+    
+    vec3 finalColor = mix(u_Fog, lit, fade);
+    FragColor = vec4(finalColor, fade);
 }
 )";
 
@@ -208,6 +212,7 @@ bool Clouds::loadTexture(const std::string& path) {
     glBindTexture(GL_TEXTURE_2D, m_texture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    // Nearest filtering keeps textures sharp and voxel-accurate
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -241,17 +246,18 @@ void Clouds::setSettings(const CloudSettings& s) {
 
 void Clouds::setWeather(const std::string& name, float transitionSeconds) {
     CloudSettings target = m_settings;
+    // Clean, high-threshold spacing reminiscent of classic vanilla skies
     if (name == "clear") {
-        target.threshold = 0.66f; target.opacity = 1.0f; target.darken = 0.0f;
+        target.threshold = 0.68f; target.opacity = 1.0f; target.darken = 0.0f;
         target.color = glm::vec3(1.0f); target.scrollSpeed = 1.0f;
     } else if (name == "cloudy") {
-        target.threshold = 0.52f; target.darken = 0.1f;
+        target.threshold = 0.55f; target.darken = 0.1f;
         target.color = glm::vec3(0.92f); target.scrollSpeed = 2.0f;
     } else if (name == "rain") {
         target.threshold = 0.46f; target.darken = 0.35f;
         target.color = glm::vec3(0.7f); target.scrollSpeed = 3.0f;
     } else if (name == "storm") {
-        target.threshold = 0.40f; target.darken = 0.6f;
+        target.threshold = 0.38f; target.darken = 0.6f;
         target.color = glm::vec3(0.45f); target.scrollSpeed = 5.0f;
     } else {
         std::cerr << "[Clouds] Unknown weather: " << name << std::endl;
@@ -314,9 +320,11 @@ void Clouds::render(const glm::mat4& view, const glm::mat4& proj,
     const int tx = static_cast<int>(std::floor(camPos.x / kTileWorld));
     const int tz = static_cast<int>(std::floor(camPos.z / kTileWorld));
 
+    const int renderRadius = 3;
+
     glBindVertexArray(m_vao);
-    for (int dz = -1; dz <= 1; ++dz) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    for (int dz = -renderRadius; dz <= renderRadius; ++dz) {
+        for (int dx = -renderRadius; dx <= renderRadius; ++dx) {
             glm::mat4 model = glm::translate(glm::mat4(1.0f),
                 glm::vec3((tx + dx) * kTileWorld, 0.0f, (tz + dz) * kTileWorld));
             glUniformMatrix4fv(m_locModel, 1, GL_FALSE, glm::value_ptr(model));

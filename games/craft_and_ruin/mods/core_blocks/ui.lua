@@ -1,21 +1,15 @@
--- ui.lua
-
 print("[Craft & Ruin] Configuring enlarged hotbar UI...")
 
--- Set 9 slots
 hotbar.set_size(9)
-
--- Set slot size (e.g., 0.12 or 0.15 for a much larger physical hotbar)
 hotbar.set_slot_size(0.14)
 
--- Auto-center dynamically based on slot count and size:
--- Total width roughly = slots * (slot_size / aspect)
-hotbar.set_position(-0.35, -0.85)
+-- posX: 0 = centered. posY: pixels above the bottom margin.
+hotbar.set_position(0.0, 20)
 
-hotbar.set_texture("mcl_inventory_hotbar.png")
-hotbar.set_selected_texture("mcl_inventory_hotbar_selected.png")
+hotbar.set_texture("hotbar_bg.png")
+hotbar.set_selected_texture("hotbar_selected.png")
+hotbar.set_texture_scale(1.0)
 
--- Populate slots
 hotbar.set_slot(1, "grass")
 hotbar.set_slot(2, "dirt")
 hotbar.set_slot(3, "stone")
