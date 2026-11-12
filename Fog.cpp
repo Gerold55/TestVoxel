@@ -1,5 +1,5 @@
-#include "Fog.h" 
-#include <algorithm>          // For glm::min/clamp equivalents if needed
+#include "Fog.h"
+#include <algorithm>          // For standard algorithms if needed
 
 // Blends sunset to day above the horizon, and to night below it.
 glm::vec3 fogColorForSun(const FogSettings& f, float sunDirY) {
