@@ -35,11 +35,23 @@
 #include "Clouds.h"
 #include "Fog.h"
 #include "MainMenu.h"
+#include "Inventory.h" // Include your new dedicated Inventory module
 
 namespace fs = std::filesystem;
 
 namespace {
     constexpr Dimensions2D baseResolution{1920, 1080};
+
+    void scaleCursorToFramebuffer(GLFWwindow* window, double& x, double& y,
+                                  int framebufferWidth, int framebufferHeight) {
+        int windowWidth = 0;
+        int windowHeight = 0;
+        glfwGetWindowSize(window, &windowWidth, &windowHeight);
+        if (windowWidth == 0 || windowHeight == 0) return;
+
+        x *= static_cast<double>(framebufferWidth) / windowWidth;
+        y *= static_cast<double>(framebufferHeight) / windowHeight;
+    }
 }
 
 struct UnderwaterSettings {
@@ -64,6 +76,7 @@ Skybox* g_Skybox = nullptr;
 Clouds* g_Clouds = nullptr;
 World* g_WorldInstance = nullptr;
 MainMenu* g_MainMenu = nullptr;
+InventorySystem g_Inventory; // Dedicated C++ inventory system instance
 float g_FieldOfView = 70.0f;
 FogSettings g_Fog;
 UnderwaterSettings g_Underwater;
@@ -73,8 +86,8 @@ float g_UnderwaterBlend = 0.0f;
 bool g_SpawnPlaced = false;
 double g_LoadStartTime = 0.0;
 float g_LoadingProgress = 0.0f;
-constexpr int kSpawnReadyRadius = 2;       // chunks around the spawn that must be ready
-constexpr double kLoadTimeoutSec = 30.0;   // start anyway after this long
+constexpr int kSpawnReadyRadius = 2;        // chunks around the spawn that must be ready
+constexpr double kLoadTimeoutSec = 30.0;    // start anyway after this long
 
 struct WaterColors {
     glm::vec3 shallow;
@@ -761,12 +774,19 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     if (g_ChatSystem && g_ChatSystem->isOpen) return;
     EngineContext* ctx = static_cast<EngineContext*>(glfwGetWindowUserPointer(window));
     if (ctx && ctx->player) {
-        if (yoffset > 0) g_Hotbar->previousSlot();
-        else if (yoffset < 0) g_Hotbar->nextSlot();
+        if (!g_Hotbar || !g_Inventory.isCreativeOpen()) {
+            if (yoffset > 0) g_Hotbar->previousSlot();
+            else if (yoffset < 0) g_Hotbar->nextSlot();
+        } else {
+            try {
+                sol::state* lua = ctx->lua;
+                sol::function scrollLua = (*lua)["on_scroll_input"];
+                if (scrollLua.valid()) scrollLua(xoffset, yoffset);
+            } catch (...) {}
+        }
     }
 }
 
-// Draws the loading screen: dark background, title, and a progress bar.
 void drawLoadingScreen(GLuint uiProgram, GLuint fontProgram, float progress, int width, int height) {
     static GLuint vao = 0, vbo = 0;
     if (vao == 0) {
@@ -846,13 +866,27 @@ int main() {
 
         g_FontRenderer->init("fonts/PixeloidSans.ttf");
 
+        EngineContext ctx;
+        glfwSetWindowUserPointer(window, &ctx);
+
         glfwSetCharCallback(window, [](GLFWwindow* win, unsigned int codepoint) {
-            if (g_ChatSystem) g_ChatSystem->handleCharInput(codepoint);
+            if (g_ChatSystem && g_ChatSystem->isOpen) {
+                g_ChatSystem->handleCharInput(codepoint);
+                return;
+            }
+            EngineContext* c = static_cast<EngineContext*>(glfwGetWindowUserPointer(win));
+            if (c && c->lua) {
+                try {
+                    sol::state* lua = c->lua;
+                    sol::function charLua = (*lua)["on_char_input"];
+                    if (charLua.valid()) charLua(codepoint);
+                } catch (...) {}
+            }
         });
 
         glfwSetKeyCallback(window, [](GLFWwindow* win, int key, int scancode, int action, int mods) {
-            EngineContext* ctx = static_cast<EngineContext*>(glfwGetWindowUserPointer(win));
-            if (!ctx) return;
+            EngineContext* c = static_cast<EngineContext*>(glfwGetWindowUserPointer(win));
+            if (!c) return;
 
             if (g_ChatSystem && g_ChatSystem->isOpen) {
                 g_ChatSystem->handleKeyInput(key, scancode, action, mods, win);
@@ -871,23 +905,23 @@ int main() {
                 }
 
                 if (key == GLFW_KEY_E) {
-                    if (g_Hotbar) {
-                        g_Hotbar->toggleCreativeInventory();
-                        int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
-                        if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                        else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    }
+                    // Use native C++ inventory toggle & cursor update
+                    g_Inventory.toggleCreative();
+                    int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
+                    if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    
                     try {
-                        sol::state* lua = ctx->lua;
-                        sol::function toggleLuaUI = (*lua)["toggle_creative_inventory"];
-                        if (toggleLuaUI.valid()) toggleLuaUI();
+                        sol::state* lua = c->lua;
+                        sol::function toggleInv = (*lua)["toggle_main_inventory"];
+                        if (toggleInv.valid()) toggleInv();
                     } catch (...) {}
                     return;
                 }
 
                 if (key == GLFW_KEY_ESCAPE) {
-                    if (g_Hotbar && g_Hotbar->isCreativeOpen) {
-                        g_Hotbar->isCreativeOpen = false;
+                    if (g_Inventory.isCreativeOpen()) {
+                        g_Inventory.setCreativeOpen(false);
                         glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                         return;
                     }
@@ -934,6 +968,26 @@ int main() {
         glAttachShader(modelShaderProgram, compileShader(GL_FRAGMENT_SHADER, modelFragmentShaderSource));
         glLinkProgram(modelShaderProgram);
 
+        // Minimal UI table for basic callbacks
+        auto uiTable = lua.create_named_table("ui");
+        
+        uiTable["get_mouse_pos"] = [window]() {
+            double x, y;
+            glfwGetCursorPos(window, &x, &y);
+            int framebufferWidth, framebufferHeight;
+            glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+            scaleCursorToFramebuffer(window, x, y, framebufferWidth, framebufferHeight);
+            return std::make_tuple(x, y);
+        };
+
+        uiTable["draw_text"] = [&](const std::string& text, float x, float y, float r, float g, float b) {
+            if (g_FontRenderer) {
+                Dimensions2D windowSize;
+                glfwGetFramebufferSize(window, &windowSize.width, &windowSize.height);
+                g_FontRenderer->renderText(fontProgram, text, x, y, 1.0f, 1.0f, glm::vec4(r, g, b, 1.0f), windowSize);
+            }
+        };
+
         lua.new_usertype<Bone>("Bone",
             "set_rotation", [](Bone& b, float x, float y, float z) { b.rotation = glm::vec3(x, y, z); },
             "get_rotation", [](Bone& b) { return std::make_tuple(b.rotation.x, b.rotation.y, b.rotation.z); },
@@ -963,8 +1017,8 @@ int main() {
                 if (adj >= 0 && adj < g_Hotbar->slotCount) g_Hotbar->activeSlot = adj;
             }
         };
-        hotbarTable["is_creative_open"] = []() { return g_Hotbar ? g_Hotbar->isCreativeOpen : false; };
-        hotbarTable["toggle_creative"] = []() { if (g_Hotbar) g_Hotbar->toggleCreativeInventory(); };
+        hotbarTable["is_creative_open"] = []() { return g_Inventory.isCreativeOpen(); };
+        hotbarTable["toggle_creative"] = []() { g_Inventory.toggleCreative(); };
         hotbarTable["get_slot_block"] = [](int slotIndex) -> std::string {
             if (!g_Hotbar) return "air";
             int adj = slotIndex - 1;
@@ -1084,8 +1138,8 @@ int main() {
         auto worldTable = lua.create_named_table("world");
         worldTable["set_render_distance"] = [](int chunks) { if (g_WorldInstance) g_WorldInstance->setRenderDistance(chunks); };
         worldTable["get_render_distance"] = []() { return g_WorldInstance ? g_WorldInstance->renderDistance() : 10; };
-        worldTable["set_load_budget"]     = [](float ms) { if (g_WorldInstance) g_WorldInstance->setLoadBudgetMs(ms); };
-        worldTable["set_mesh_budget"]     = [](float ms) { if (g_WorldInstance) g_WorldInstance->setMeshBudgetMs(ms); };
+        worldTable["set_load_budget"]      = [](float ms) { if (g_WorldInstance) g_WorldInstance->setLoadBudgetMs(ms); };
+        worldTable["set_mesh_budget"]      = [](float ms) { if (g_WorldInstance) g_WorldInstance->setMeshBudgetMs(ms); };
         worldTable["get_loaded_chunks"]   = []() { return g_WorldInstance ? static_cast<int>(g_WorldInstance->loadedChunkCount()) : 0; };
         worldTable["get_pending_chunks"]  = []() { return g_WorldInstance ? static_cast<int>(g_WorldInstance->pendingLoadCount()) : 0; };
 
@@ -1267,9 +1321,7 @@ int main() {
         Player player;
         player.position = glm::vec3(8.0f, 100.0f, 8.0f);
 
-        EngineContext ctx;
         ctx.player = &player; ctx.lua = &lua;
-        glfwSetWindowUserPointer(window, &ctx);
 
         glfwSetCursorPosCallback(window, [](GLFWwindow* win, double xpos, double ypos) {
             if (g_CurrentGameState == GameState::PLAYING) {
@@ -1290,6 +1342,7 @@ int main() {
                 glfwGetFramebufferSize(win, &sw, &sh);
                 double mx, my;
                 glfwGetCursorPos(win, &mx, &my);
+                scaleCursorToFramebuffer(win, mx, my, sw, sh);
 
                 if (g_CurrentGameState == GameState::MENU && g_MainMenu) {
                     std::string actionResult = g_MainMenu->handleMouseClick(mx, my, sw, sh);
@@ -1302,8 +1355,17 @@ int main() {
                     } else if (actionResult == "quit") {
                         glfwSetWindowShouldClose(win, true);
                     }
-                } else if (g_CurrentGameState == GameState::PLAYING && g_Hotbar && g_Hotbar->isCreativeOpen) {
-                    g_Hotbar->handleMouseClick(mx, my, sw, sh);
+                } else if (g_CurrentGameState == GameState::PLAYING && g_Inventory.isCreativeOpen()) {
+                    // Call native C++ inventory click handler
+                    g_Inventory.handleCreativeClick(mx, my, static_cast<float>(sw), static_cast<float>(sh));
+                    
+                    try {
+                        sol::state* lua = ctx->lua;
+                        sol::function handleInvClick = (*lua)["handle_inventory_click"];
+                        if (handleInvClick.valid()) {
+                            handleInvClick(mx, my, sw, sh);
+                        }
+                    } catch (...) {}
                 }
             }
         });
@@ -1331,8 +1393,6 @@ int main() {
 
             bool isCursorDisabled = (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED);
 
-            // --- Loading: stream the spawn area and place the player on the ground.
-            // Physics and gameplay are paused until the area is ready.
             if (g_CurrentGameState == GameState::LOADING) {
                 world.setLoadBudgetMs(40.0f);
                 world.setMeshBudgetMs(30.0f);
@@ -1476,7 +1536,7 @@ int main() {
             const bool submerged = waterDepth >= 0.0f;
 
             {
-                const float target  = submerged ? 1.0f : 0.0f;
+                const float target   = submerged ? 1.0f : 0.0f;
                 const float seconds = submerged ? g_Underwater.fadeInSeconds : g_Underwater.fadeOutSeconds;
                 const float step    = deltaTime / glm::max(seconds, 0.01f);
                 if (g_UnderwaterBlend < target) g_UnderwaterBlend = glm::min(g_UnderwaterBlend + step, target);
@@ -1609,9 +1669,9 @@ int main() {
                 g_Clouds->update(deltaTime);
                 if (!skyHidden) {
                     g_Clouds->render(view, proj, player.position,
-                                     static_cast<float>(glfwGetTime()),
-                                     sunDir.y,
-                                     fogCol);
+                                       static_cast<float>(glfwGetTime()),
+                                       sunDir.y,
+                                       fogCol);
                 }
 
                 glUseProgram(modelShaderProgram);
@@ -1696,9 +1756,12 @@ int main() {
                 g_Hotbar->updateBuffers(width, height);
                 g_Hotbar->renderSlots(uiProgram, texturedUIProgram);
 
+                // Render native C++ Creative Inventory
+                g_Inventory.renderCreativeInventory(window, lua, static_cast<float>(width), static_cast<float>(height), uiProgram, texturedUIProgram);
+
                 try {
-                    sol::function renderLuaUI = lua["render_creative_inventory"];
-                    if (renderLuaUI.valid()) renderLuaUI(width, height);
+                    sol::function renderInvUI = lua["render_inventory"];
+                    if (renderInvUI.valid()) renderInvUI(width, height);
                 } catch (...) {}
 
                 if (g_ChatSystem) g_ChatSystem->renderChatOverlay(g_FontRenderer, fontProgram, width, height);
@@ -1719,6 +1782,7 @@ int main() {
                 glfwGetFramebufferSize(window, &sw, &sh);
                 double mx, my;
                 glfwGetCursorPos(window, &mx, &my);
+                scaleCursorToFramebuffer(window, mx, my, sw, sh);
 
                 if (g_MainMenu) {
                     g_MainMenu->updateAndBuildBuffers(mx, my, sw, sh);

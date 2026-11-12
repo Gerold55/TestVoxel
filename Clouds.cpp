@@ -125,29 +125,41 @@ void main() {
 }
 )";
 
+// Updated Fragment Shader with enhanced night-sky reflection & deep atmospheric tinting
 const char* kCloudFS = R"(
 #version 330 core
 in float vShade;
 in vec3 vWorld;
 out vec4 FragColor;
 uniform vec3  u_Color;
+uniform vec3  u_NightColor;
 uniform vec3  u_Fog;
 uniform vec3  u_CamPos;
+uniform float u_DayAmount;     // 1.0 for full day, 0.0 for full night
 uniform float u_FadeStart;
 uniform float u_FadeEnd;
 uniform sampler2D u_Tex;
 uniform int   u_UseTex;
 uniform float u_TexScale;
 void main() {
-    vec3 base = u_Color;
+    // Blend smoothly between daytime cloud color and deep midnight night color
+    vec3 base = mix(u_NightColor, u_Color, u_DayAmount);
+    
     if (u_UseTex == 1) {
         base *= texture(u_Tex, fract(vWorld.xz / u_TexScale)).rgb;
     }
+    
+    // Apply voxel shading
     vec3 lit = base * vShade;
+    
+    // At night, subtly pull colors toward the dark background fog/night sky tone for atmospheric immersion
+    vec3 nightTint = mix(lit, u_Fog * 0.8f, (1.0f - u_DayAmount) * 0.4f);
+    vec3 finalBaseColor = mix(nightTint, lit, u_DayAmount);
+
     float dist = distance(vWorld.xz, u_CamPos.xz);
     float fade = clamp((u_FadeEnd - dist) / max(u_FadeEnd - u_FadeStart, 1.0), 0.0, 1.0);
     
-    vec3 finalColor = mix(u_Fog, lit, fade);
+    vec3 finalColor = mix(u_Fog, finalBaseColor, fade);
     FragColor = vec4(finalColor, fade);
 }
 )";
@@ -171,18 +183,20 @@ void Clouds::init() {
     glDeleteShader(vs);
     glDeleteShader(fs);
 
-    m_locModel    = glGetUniformLocation(m_program, "model");
-    m_locView     = glGetUniformLocation(m_program, "view");
-    m_locProj     = glGetUniformLocation(m_program, "projection");
-    m_locScroll   = glGetUniformLocation(m_program, "u_Scroll");
-    m_locCam      = glGetUniformLocation(m_program, "u_CamPos");
-    m_locColor    = glGetUniformLocation(m_program, "u_Color");
-    m_locFog      = glGetUniformLocation(m_program, "u_Fog");
-    m_locFadeS    = glGetUniformLocation(m_program, "u_FadeStart");
-    m_locFadeE    = glGetUniformLocation(m_program, "u_FadeEnd");
-    m_locTex      = glGetUniformLocation(m_program, "u_Tex");
-    m_locUseTex   = glGetUniformLocation(m_program, "u_UseTex");
-    m_locTexScale = glGetUniformLocation(m_program, "u_TexScale");
+    m_locModel     = glGetUniformLocation(m_program, "model");
+    m_locView      = glGetUniformLocation(m_program, "view");
+    m_locProj      = glGetUniformLocation(m_program, "projection");
+    m_locScroll    = glGetUniformLocation(m_program, "u_Scroll");
+    m_locCam       = glGetUniformLocation(m_program, "u_CamPos");
+    m_locColor     = glGetUniformLocation(m_program, "u_Color");
+    m_locNightColor= glGetUniformLocation(m_program, "u_NightColor");
+    m_locFog       = glGetUniformLocation(m_program, "u_Fog");
+    m_locDayAmount = glGetUniformLocation(m_program, "u_DayAmount");
+    m_locFadeS     = glGetUniformLocation(m_program, "u_FadeStart");
+    m_locFadeE     = glGetUniformLocation(m_program, "u_FadeEnd");
+    m_locTex       = glGetUniformLocation(m_program, "u_Tex");
+    m_locUseTex    = glGetUniformLocation(m_program, "u_UseTex");
+    m_locTexScale  = glGetUniformLocation(m_program, "u_TexScale");
 
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
@@ -212,7 +226,6 @@ bool Clouds::loadTexture(const std::string& path) {
     glBindTexture(GL_TEXTURE_2D, m_texture);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-    // Nearest filtering keeps textures sharp and voxel-accurate
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -246,19 +259,26 @@ void Clouds::setSettings(const CloudSettings& s) {
 
 void Clouds::setWeather(const std::string& name, float transitionSeconds) {
     CloudSettings target = m_settings;
-    // Clean, high-threshold spacing reminiscent of classic vanilla skies
     if (name == "clear") {
         target.threshold = 0.68f; target.opacity = 1.0f; target.darken = 0.0f;
-        target.color = glm::vec3(1.0f); target.scrollSpeed = 1.0f;
+        target.color = glm::vec3(1.0f); 
+        target.nightColor = glm::vec3(0.15f, 0.18f, 0.28f); // Deep midnight blue-grey tint for clear nights
+        target.scrollSpeed = 1.0f;
     } else if (name == "cloudy") {
         target.threshold = 0.55f; target.darken = 0.1f;
-        target.color = glm::vec3(0.92f); target.scrollSpeed = 2.0f;
+        target.color = glm::vec3(0.92f); 
+        target.nightColor = glm::vec3(0.12f, 0.14f, 0.22f); // Darker, heavier overcast night clouds
+        target.scrollSpeed = 2.0f;
     } else if (name == "rain") {
         target.threshold = 0.46f; target.darken = 0.35f;
-        target.color = glm::vec3(0.7f); target.scrollSpeed = 3.0f;
+        target.color = glm::vec3(0.7f); 
+        target.nightColor = glm::vec3(0.08f, 0.09f, 0.15f); // Stormy dark blue/grey night tint
+        target.scrollSpeed = 3.0f;
     } else if (name == "storm") {
         target.threshold = 0.38f; target.darken = 0.6f;
-        target.color = glm::vec3(0.45f); target.scrollSpeed = 5.0f;
+        target.color = glm::vec3(0.45f); 
+        target.nightColor = glm::vec3(0.05f, 0.05f, 0.10f); // Near-black thunderstorm night tint
+        target.scrollSpeed = 5.0f;
     } else {
         std::cerr << "[Clouds] Unknown weather: " << name << std::endl;
         return;
@@ -286,9 +306,8 @@ void Clouds::render(const glm::mat4& view, const glm::mat4& proj,
     if (m_meshDirty) rebuildMesh();
     if (m_vertexCount == 0) return;
 
+    // Calculate day amount factor from sun direction Y (-1.0 to 1.0)
     const float dayAmount = glm::clamp(sunDirY * 2.0f + 0.5f, 0.0f, 1.0f);
-    glm::vec3 color = glm::mix(m_settings.nightColor, m_settings.color, dayAmount);
-    color *= (1.0f - m_settings.darken);
 
     const float kTileWorld = kTile * m_settings.cellSize;
     const float scrollX = std::fmod(timeSeconds * m_settings.scrollSpeed, kTileWorld);
@@ -300,8 +319,13 @@ void Clouds::render(const glm::mat4& view, const glm::mat4& proj,
     glUniformMatrix4fv(m_locProj, 1, GL_FALSE, glm::value_ptr(proj));
     glUniform2f(m_locScroll, scrollX, 0.0f);
     glUniform3f(m_locCam, camPos.x, camPos.y, camPos.z);
-    glUniform3f(m_locColor, color.r, color.g, color.b);
+    
+    // Pass colors and night reflection weights to the shader
+    glUniform3f(m_locColor, m_settings.color.r, m_settings.color.g, m_settings.color.b);
+    glUniform3f(m_locNightColor, m_settings.nightColor.r, m_settings.nightColor.g, m_settings.nightColor.b);
     glUniform3f(m_locFog, fogColor.r, fogColor.g, fogColor.b);
+    glUniform1f(m_locDayAmount, dayAmount);
+
     glUniform1f(m_locFadeS, m_settings.fadeStart);
     glUniform1f(m_locFadeE, m_settings.fadeEnd);
     glUniform1f(m_locTexScale, 16.0f);

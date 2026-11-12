@@ -39,13 +39,6 @@ constexpr float kIconScale = 0.50f;
 constexpr float kIconGrowPx = 1.0f;
 
 constexpr float kBottomMargin   = 20.0f;  // pixels between the bar and the bottom edge
-constexpr float kTabW           = 100.0f;
-constexpr float kTabH           = 24.0f;
-constexpr float kTabGap         = 6.0f;
-constexpr int   kCreativeCols   = 9;
-constexpr float kCreativeMargin = 16.0f;
-constexpr float kCreativeHeader = 45.0f;
-constexpr float kCreativeFooter = 15.0f;
 
 // ---------------------------------------------------------------------------
 // 2D UI drawing: pixel coordinates with a top-left origin, one shader.
@@ -251,7 +244,7 @@ float clampInside(float x, float w, float W) {
 
 struct BarLayout {
     bool textured = false;
-    float s = 1.0f;                 // atlas pixel -> screen pixel scale (textured mode)
+    float s = 1.0f;                   // atlas pixel -> screen pixel scale (textured mode)
     float x = 0.0f, y = 0.0f;       // top-left of the bar
     float w = 0.0f, h = 0.0f;       // size of the bar
     float pitch = 0.0f;             // distance between slot origins
@@ -270,7 +263,6 @@ BarLayout computeBar(const Hotbar& hb, float W, float H) {
         float texW = kFallbackTexW, texH = kFallbackTexH;
         textureSize(hb.customTextureID, texW, texH, kFallbackTexW, kFallbackTexH);
 
-        // Scale the atlas so its height is about 1.25x a slot, then apply textureScale.
         b.s = (slotPx * 1.25f * hb.textureScale) / texH;
         b.w = texW * b.s;
         b.h = texH * b.s;
@@ -290,7 +282,6 @@ BarLayout computeBar(const Hotbar& hb, float W, float H) {
     return b;
 }
 
-// Top-left of slot i's icon area, in pixels.
 glm::vec2 slotOrigin(const BarLayout& b, int i) {
     if (b.textured) {
         return { b.x + (kBarSlotOffset + kBarSlotPitch * i) * b.s,
@@ -304,73 +295,8 @@ glm::vec2 slotCenter(const BarLayout& b, int i) {
     return { o.x + b.box * 0.5f, o.y + b.box * 0.5f };
 }
 
-struct CreativeLayout {
-    float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
-    float box = 0.0f, gap = 6.0f;
-    float gridX = 0.0f, gridY = 0.0f;
-};
-
-CreativeLayout computeCreative(const Hotbar& hb, float W, float H, size_t itemCount) {
-    CreativeLayout c;
-    c.box = slotPixelSize(hb.slotSize, H);
-    c.gap = 6.0f;
-
-    int rows = static_cast<int>((itemCount + kCreativeCols - 1) / kCreativeCols);
-    if (rows < 3) rows = 3;
-
-    c.w = kCreativeCols * c.box + (kCreativeCols - 1) * c.gap + 2.0f * kCreativeMargin;
-    c.h = kCreativeHeader + rows * (c.box + c.gap) + kCreativeFooter;
-    c.x = std::round((W - c.w) * 0.5f);
-    c.y = std::round((H - c.h) * 0.5f);
-    c.gridX = c.x + kCreativeMargin;
-    c.gridY = c.y + kCreativeHeader;
-    return c;
-}
-
-glm::vec2 cellOrigin(const CreativeLayout& c, size_t k) {
-    const int col = static_cast<int>(k % kCreativeCols);
-    const int row = static_cast<int>(k / kCreativeCols);
-    return { std::round(c.gridX + col * (c.box + c.gap)),
-             std::round(c.gridY + row * (c.box + c.gap)) };
-}
-
-bool matchesCreativeTab(const BlockProperty& prop, int tab) {
-    if (prop.name.empty() || prop.name == "air" || prop.name == "unknown") return false;
-    if (!prop.in_creative) return false;
-
-    const bool isNature = (prop.pattern == "plantlike" ||
-                           prop.name.find("leaves") != std::string::npos ||
-                           prop.name.find("water") != std::string::npos ||
-                           prop.name.find("sand") != std::string::npos ||
-                           prop.name.find("reed") != std::string::npos);
-
-    const bool isBuilding = !isNature && (prop.name.find("stone") != std::string::npos ||
-                                          prop.name.find("dirt") != std::string::npos ||
-                                          prop.name.find("log") != std::string::npos ||
-                                          prop.name.find("gravel") != std::string::npos ||
-                                          prop.name.find("bedrock") != std::string::npos);
-
-    if (tab == 0) return true;
-    if (tab == 1) return isNature;
-    if (tab == 2) return isBuilding;
-    return false;
-}
-
-std::vector<uint8_t> creativeItemIds(int tab) {
-    std::vector<uint8_t> ids;
-    for (int i = 1; i <= 255; ++i) {
-        try {
-            const auto& prop = BlockRegistry::getInstance().getBlock(static_cast<uint8_t>(i));
-            if (matchesCreativeTab(prop, tab)) ids.push_back(static_cast<uint8_t>(i));
-        } catch (...) {
-            break;
-        }
-    }
-    return ids;
-}
-
 // ---------------------------------------------------------------------------
-// 3D item icons (voxel shader). Vertex layout: 13 floats, matching the voxel shader.
+// 3D item icons (voxel shader). Vertex layout: 13 floats.
 // ---------------------------------------------------------------------------
 
 const float kFaceVerts[6][18] = {
@@ -405,8 +331,8 @@ void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, fl
                                                ? prop.faces[0].baseLayer
                                                : prop.faces[2].baseLayer);
         const float overlay = prop.faces[0].overlayLayer >= 0
-                                  ? static_cast<float>(prop.faces[0].overlayLayer)
-                                  : -1.0f;
+                                ? static_cast<float>(prop.faces[0].overlayLayer)
+                                : -1.0f;
         const float tintBase = prop.faces[0].tintBase ? 1.0f : 0.0f;
         const float tintOverlay = prop.faces[0].tintOverlay ? 1.0f : 0.0f;
 
@@ -522,40 +448,7 @@ void Hotbar::toggleCreativeInventory() {
 }
 
 void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight) {
-    if (!isCreativeOpen) return;
-
-    const float W = static_cast<float>(screenWidth);
-    const float H = static_cast<float>(screenHeight);
-    const float mx = static_cast<float>(mouseX);
-    const float my = static_cast<float>(mouseY);
-
-    const std::vector<uint8_t> ids = creativeItemIds(creativeTab);
-    const CreativeLayout cl = computeCreative(*this, W, H, ids.size());
-    creativeX = cl.x;
-    creativeY = cl.y;
-    creativeW = cl.w;
-    creativeH = cl.h;
-
-    // Tabs sit just above the panel.
-    for (int t = 0; t < 3; ++t) {
-        const float tx = cl.x + kCreativeMargin + t * (kTabW + kTabGap);
-        const float ty = cl.y - kTabH;
-        if (mx >= tx && mx <= tx + kTabW && my >= ty && my <= ty + kTabH) {
-            creativeTab = t;
-            std::cout << "[Creative] Switched to tab: " << creativeTab << std::endl;
-            return;
-        }
-    }
-
-    // Item cells.
-    for (size_t k = 0; k < ids.size(); ++k) {
-        const glm::vec2 o = cellOrigin(cl, k);
-        if (mx >= o.x && mx <= o.x + cl.box && my >= o.y && my <= o.y + cl.box) {
-            setSlot(activeSlot, ids[k], 64);
-            std::cout << "[Creative] Selected Block ID: " << static_cast<int>(ids[k]) << std::endl;
-            return;
-        }
-    }
+    // Creative inventory click handling is now fully delegated to Lua via main.cpp bindings
 }
 
 void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
@@ -570,20 +463,7 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         appendIcon(iconVerts, slots[i].blockId, c.x, c.y, bar.box);
     }
 
-    if (isCreativeOpen) {
-        const std::vector<uint8_t> ids = creativeItemIds(creativeTab);
-        const CreativeLayout cl = computeCreative(*this, W, H, ids.size());
-        creativeX = cl.x;
-        creativeY = cl.y;
-        creativeW = cl.w;
-        creativeH = cl.h;
-
-        for (size_t k = 0; k < ids.size(); ++k) {
-            const glm::vec2 o = cellOrigin(cl, k);
-            appendIcon(iconVerts, ids[k], o.x + cl.box * 0.5f, o.y + cl.box * 0.5f, cl.box);
-        }
-    }
-
+    // Creative item icon generation is handled by Lua UI rendering
     iconVertexCount = static_cast<unsigned int>(iconVerts.size() / 13);
 
     if (iconVAO == 0) glGenVertexArrays(1, &iconVAO);
@@ -613,7 +493,6 @@ void Hotbar::renderSlots(GLuint /*uiShader*/, GLuint /*texturedUIShader*/) {
     const float W = static_cast<float>(vp[2]);
     const float H = static_cast<float>(vp[3]);
 
-    // Save the state we change, so the rest of the frame is unaffected.
     const GLboolean cullWasOn = glIsEnabled(GL_CULL_FACE);
     const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
 
@@ -658,7 +537,7 @@ void Hotbar::renderSlots(GLuint /*uiShader*/, GLuint /*texturedUIShader*/) {
         drawUi(v, customTextureID, true, W, H);
     }
 
-    // 3. Selection frame, centered on the active slot. Drawn at the texture's own size.
+    // 3. Selection frame, centered on the active slot.
     if (bar.textured && selectedTextureID != 0) {
         float selW = kFallbackSelW, selH = kFallbackSelH;
         textureSize(selectedTextureID, selW, selH, kFallbackSelW, kFallbackSelH);
@@ -672,55 +551,8 @@ void Hotbar::renderSlots(GLuint /*uiShader*/, GLuint /*texturedUIShader*/) {
         drawUi(v, selectedTextureID, true, W, H);
     }
 
-    // 4. Creative panel. Borders are drawn before fills so they frame the fill.
-    if (isCreativeOpen) {
-        const std::vector<uint8_t> ids = creativeItemIds(creativeTab);
-        const CreativeLayout cl = computeCreative(*this, W, H, ids.size());
-        creativeX = cl.x;
-        creativeY = cl.y;
-        creativeW = cl.w;
-        creativeH = cl.h;
-
-        const glm::vec4 dark(0.2f, 0.2f, 0.2f, 1.0f);
-        const glm::vec4 cellDark(0.35f, 0.35f, 0.35f, 1.0f);
-        const glm::vec4 cellFill(0.52f, 0.52f, 0.52f, 1.0f);
-
-        std::vector<Vtx> v;
-
-        for (int t = 0; t < 3; ++t) {
-            const float tx = cl.x + kCreativeMargin + t * (kTabW + kTabGap);
-            const float ty = cl.y - kTabH;
-            const glm::vec4 fill = (creativeTab == t)
-                ? glm::vec4(0.75f, 0.75f, 0.75f, 0.98f)
-                : glm::vec4(0.5f, 0.5f, 0.5f, 0.85f);
-            addRect(v, tx - 1.0f, ty - 1.0f, tx + kTabW + 1.0f, ty + kTabH + 1.0f, dark);
-            addRect(v, tx, ty, tx + kTabW, ty + kTabH, fill);
-        }
-
-        addRect(v, cl.x - 2.0f, cl.y - 2.0f, cl.x + cl.w + 2.0f, cl.y + cl.h + 2.0f, dark);
-        addRect(v, cl.x, cl.y, cl.x + cl.w, cl.y + cl.h, glm::vec4(0.75f, 0.75f, 0.75f, 0.98f));
-
-        for (size_t k = 0; k < ids.size(); ++k) {
-            const glm::vec2 o = cellOrigin(cl, k);
-            addRect(v, o.x - 1.0f, o.y - 1.0f, o.x + cl.box + 1.0f, o.y + cl.box + 1.0f, cellDark);
-            addRect(v, o.x, o.y, o.x + cl.box, o.y + cl.box, cellFill);
-        }
-
-        drawUi(v, 0, false, W, H);
-    }
-
-    if (kHotbarDebug) {
-        static int frame = 0;
-        if (++frame % 300 == 0) {
-            std::cout << "[Hotbar] textured=" << bar.textured
-                      << " bar=(" << bar.x << ", " << bar.y << ") "
-                      << bar.w << "x" << bar.h
-                      << " scale=" << bar.s
-                      << " tex=" << customTextureID
-                      << " sel=" << selectedTextureID
-                      << " viewport=" << W << "x" << H << std::endl;
-        }
-    }
+    // NOTE: Creative panel rendering has been completely removed here 
+    // so that Lua's `creative_inventory.lua` handles the window layout and tabs exclusively.
 
     if (cullWasOn) glEnable(GL_CULL_FACE);
     if (depthWasOn) glEnable(GL_DEPTH_TEST);

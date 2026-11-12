@@ -4,18 +4,18 @@
 #include <string>
 
 struct CloudSettings {
-    glm::vec3 color      = glm::vec3(1.0f);
+    glm::vec3 color       = glm::vec3(1.0f);
     glm::vec3 nightColor = glm::vec3(0.25f, 0.28f, 0.35f);
-    float     opacity    = 1.0f;     // 1.0 = solid; lower values are not used by the depth-tested path
+    float     opacity    = 1.0f;    // 1.0 = solid; lower values are not used by the depth-tested path
     float     height     = 150.0f;   // base height in blocks
-    float     thickness  = 2.0f;     // layer thickness in blocks
-    float     cellSize   = 2.0f;     // width of one cloud cell in blocks
+    float     thickness  = 2.0f;    // layer thickness in blocks
+    float     cellSize   = 2.0f;    // width of one cloud cell in blocks
     float     threshold  = 0.56f;    // coverage: higher = fewer clouds
     float     scrollSpeed = 2.0f;    // blocks per second
     float     fadeStart  = 250.0f;   // distance where fog fade begins
     float     fadeEnd    = 450.0f;   // distance where clouds fully fade to fog
-    float     darken     = 0.0f;     // 0..1, multiplies color for storm darkening
-    std::string texturePath;          // optional; empty = flat color
+    float     darken     = 0.0f;    // 0..1, multiplies color for storm darkening
+    std::string texturePath;            // optional; empty = flat color
 };
 
 class Clouds {
@@ -53,16 +53,18 @@ private:
     GLuint  m_texture = 0;
     GLsizei m_vertexCount = 0;
 
-    GLint m_locModel   = -1;
-    GLint m_locView    = -1;
-    GLint m_locProj    = -1;
-    GLint m_locScroll  = -1;
-    GLint m_locCam     = -1;
-    GLint m_locColor   = -1;
-    GLint m_locFog     = -1;
-    GLint m_locFadeS   = -1;
-    GLint m_locFadeE   = -1;
-    GLint m_locTex     = -1;
-    GLint m_locUseTex  = -1;
-    GLint m_locTexScale= -1;
+    GLint m_locModel      = -1;
+    GLint m_locView       = -1;
+    GLint m_locProj       = -1;
+    GLint m_locScroll     = -1;
+    GLint m_locCam        = -1;
+    GLint m_locColor      = -1;
+    GLint m_locNightColor = -1; // Added for night sky color reflection
+    GLint m_locFog        = -1;
+    GLint m_locDayAmount  = -1; // Added for day/night intensity blending
+    GLint m_locFadeS      = -1;
+    GLint m_locFadeE      = -1;
+    GLint m_locTex        = -1;
+    GLint m_locUseTex     = -1;
+    GLint m_locTexScale   = -1;
 };
