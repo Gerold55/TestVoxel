@@ -58,7 +58,7 @@ local Title = "Game Menu"
 local Buttons = {
     { label = "Back to Game",  action = function() engine.resume() end },
     { gap = 12 },
-    { label = "Options...",    disabled = true },
+    { label = "Options...",    action = function() engine.open_settings() end },
     { gap = 12 },
     { label = "Quit to Title", action = function() engine.quit_to_menu() end },
     { label = "Quit Game",     action = function() engine.quit() end },

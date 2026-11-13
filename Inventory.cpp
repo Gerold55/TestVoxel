@@ -314,6 +314,19 @@ void drawMissing(float x, float y, float s) {
 void drawItemIcon(uint8_t id, float x, float y, float s) {
     if (id == 0) return;
     const auto& block = BlockRegistry::getInstance().getBlock(id);
+
+    // inventory_image: flat picture, drawn as-is (no tint)
+    if (block.inventoryLayer >= 0) {
+        QuadCorner c[4] = {
+            { x,     y,     0.0f, 0.0f },
+            { x + s, y,     1.0f, 0.0f },
+            { x + s, y + s, 1.0f, 1.0f },
+            { x,     y + s, 0.0f, 1.0f },
+        };
+        drawTexturedQuad(c, block.inventoryLayer, 1.0f, 1.0f, 1.0f);
+        return;
+    }
+
     if (!getIconFace(block)) {
         const float inset = s * 0.15f;
         drawMissing(x + inset, y + inset, s - 2 * inset);
@@ -438,7 +451,8 @@ void InventorySystem::registerLuaBindings(sol::state& lua) {
         t["id"]          = static_cast<int>(id);
         t["name"]        = b.name;
         t["pattern"]     = b.pattern;
-        t["has_texture"] = (getIconFace(b) != nullptr);
+        t["has_texture"] = (getIconFace(b) != nullptr) || b.inventoryLayer >= 0;
+        t["inventory_image"] = b.inventoryImage;
         t["in_creative"] = b.in_creative;
         return t;
     });
@@ -502,6 +516,16 @@ void InventorySystem::renderLuaScreen(GLFWwindow* window, sol::state& lua, const
                                       float width, float height, GLuint uiProgram, GLuint texturedUIProgram) {
     s_lua = &lua;
     s_window = window;
+
+    // A missing draw function shows up as a blank screen - say why in the console (once)
+    {
+        sol::object fn = lua[luaFunction];
+        if (!fn.valid() || fn.get_type() != sol::type::function) {
+            reportLuaError(luaFunction, "function not found - is the .lua file that defines it being loaded? "
+                                        "(Files in a folder with an init.lua only run if init.lua loads them.)");
+            return;
+        }
+    }
 
     GLStateGuard stateGuard;   // restores all GL state when this function returns
 

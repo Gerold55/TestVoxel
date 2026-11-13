@@ -154,10 +154,9 @@ void generateFallbackTerrain(ChunkMesh& chunk, int chunkX, int chunkZ, float see
             const int surface = 55 + static_cast<int>(h);
             const int top = std::min(surface, CHUNK_HEIGHT - 1);
 
+            // Caves are carved afterwards by CaveGenerator::carveChunk (see loadChunk)
             for (int y = 0; y <= top; ++y) {
-                if (CaveGenerator::isCarvedOut(worldX, y, worldZ)) {
-                    chunk.setBlock(x, y, z, 0);
-                } else if (y == surface) {
+                if (y == surface) {
                     chunk.setBlock(x, y, z, grassId);
                 } else if (y > surface - 4) {
                     chunk.setBlock(x, y, z, dirtId);
@@ -253,6 +252,7 @@ void World::setRenderDistance(int chunks) {
 
 void World::ensureLuaSeeded(sol::state& lua) {
     if (m_luaSeeded) return;
+    CaveGenerator::setSeed(m_seed);
     sol::protected_function setSeed = lua["set_world_seed"];
     if (setSeed.valid()) {
         auto result = setSeed(m_seed);
@@ -387,6 +387,10 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
             generateFallbackTerrain(*chunk, chunkX, chunkZ,
                                     static_cast<float>(m_seed % 100000) * 0.001f);
         }
+
+        // 3. Carve caves into the new terrain (seeded, so the same seed gives the same caves).
+        //    Saved chunks skip this - their caves are already in the file.
+        CaveGenerator::carveChunk(*chunk, chunkX, chunkZ);
     }
 
     chunks[ChunkCoord{chunkX, chunkZ}] = chunk;

@@ -1,11 +1,17 @@
--- world_select.lua — Singleplayer world list and "Create New World" screen
+-- world_select.lua - Singleplayer world list, "Create New World" and "Delete World" screens
 -- ---------------------------------------------------------------------------
 -- Shown after clicking Singleplayer on the title screen. Everything is editable.
 --
+-- Worlds belong to the game they were made with. Only the selected game's worlds
+-- are listed, and they can only be played while that game's mods are loaded
+-- (the game that was selected when the program started).
+--
 -- Engine functions used:
 --   engine.list_worlds()               -> { { name = "My World", seed = "123" }, ... } newest first
---   engine.create_world(name, seed)    -> folder name actually used (seed "" = random)
---   engine.play_world(name)            load that world
+--   engine.create_world(name, seed)    -> folder name, or nil + error
+--   engine.play_world(name)            -> true, or false + error
+--   engine.delete_world(name)          -> true, or false + error
+--   engine.get_game_info()             -> { selected, loaded, title, can_play }
 --   engine.back_to_title()
 --
 -- C++ calls:
@@ -33,11 +39,14 @@ local Theme = {
         title          = { 1.00, 1.00, 1.00, 1.00 },
         name           = { 1.00, 1.00, 1.00, 1.00 },
         detail         = { 0.63, 0.63, 0.63, 1.00 },
+        warning        = { 1.00, 0.45, 0.40, 1.00 },
         outline        = { 0.00, 0.00, 0.00, 1.00 },
         outline_hover  = { 1.00, 1.00, 1.00, 1.00 },
         button         = { 0.44, 0.44, 0.44, 1.00 },
         button_hover   = { 0.50, 0.55, 0.78, 1.00 },
         button_off     = { 0.27, 0.27, 0.27, 1.00 },
+        danger         = { 0.55, 0.20, 0.20, 1.00 },   -- the confirm-delete button
+        danger_hover   = { 0.75, 0.25, 0.25, 1.00 },
         bevel_light    = { 1.00, 1.00, 1.00, 0.30 },
         bevel_dark     = { 0.00, 0.00, 0.00, 0.35 },
         text           = { 0.88, 0.88, 0.88, 1.00 },
@@ -67,7 +76,7 @@ local KEY_TAB = 258        -- GLFW_KEY_TAB
 -- ===========================================================================
 
 local state = {
-    mode = "list",         -- "list" or "create"
+    mode = "list",         -- "list", "create" or "delete"
     worlds = nil,
     selected = nil,
     scroll = 0,
@@ -76,6 +85,8 @@ local state = {
     name = "New World",    -- create screen fields
     seed = "",
     focus = "name",
+    message = nil,         -- error shown under the title (e.g. wrong game)
+    game = nil,            -- engine.get_game_info()
 }
 
 -- ===========================================================================
@@ -113,7 +124,16 @@ local function gui_scale(W, H)
     return clamp(math.floor(math.min(W / 480, H / 360) * 2) / 2, 1, 4)
 end
 
+local function can_play()
+    return state.game == nil or state.game.can_play ~= false
+end
+
+local function selected_world()
+    return state.worlds and state.selected and state.worlds[state.selected] or nil
+end
+
 local function refresh_worlds()
+    state.game = (engine and engine.get_game_info and engine.get_game_info()) or nil
     state.worlds = (engine and engine.list_worlds and engine.list_worlds()) or {}
     if state.selected and state.selected > #state.worlds then state.selected = nil end
     if not state.selected and #state.worlds > 0 then state.selected = 1 end
@@ -124,8 +144,10 @@ end
 -- ===========================================================================
 
 local function play_selected()
-    local w = state.worlds and state.worlds[state.selected]
-    if w then engine.play_world(w.name) end
+    local w = selected_world()
+    if not w then return end
+    local ok, err = engine.play_world(w.name)
+    if ok == false then state.message = err end
 end
 
 local function open_create()
@@ -133,13 +155,39 @@ local function open_create()
     state.name = "New World"
     state.seed = ""
     state.focus = "name"
+    state.message = nil
 end
 
 local function create_and_play()
-    local folder = engine.create_world(state.name, state.seed)
+    local folder, err = engine.create_world(state.name, state.seed)
     state.mode = "list"
+    if not folder then
+        state.message = err
+        return
+    end
     refresh_worlds()
-    engine.play_world(folder)
+    local ok, perr = engine.play_world(folder)
+    if ok == false then state.message = perr end
+end
+
+local function open_delete()
+    if not selected_world() then return end
+    state.mode = "delete"
+    state.message = nil
+end
+
+local function confirm_delete()
+    local w = selected_world()
+    state.mode = "list"
+    if not w then return end
+    local ok, err = engine.delete_world(w.name)
+    if ok == false then
+        state.message = err
+    else
+        state.message = nil
+        state.selected = nil
+    end
+    refresh_worlds()
 end
 
 -- ===========================================================================
@@ -148,7 +196,14 @@ end
 
 local function draw_button(b, mx, my, S, fs)
     local hovered = b.enabled and inside(mx, my, b.x, b.y, b.w, b.h)
-    local fill = (not b.enabled) and C.button_off or (hovered and C.button_hover or C.button)
+    local fill
+    if not b.enabled then
+        fill = C.button_off
+    elseif b.danger then
+        fill = hovered and C.danger_hover or C.danger
+    else
+        fill = hovered and C.button_hover or C.button
+    end
     local outline = hovered and C.outline_hover or C.outline
 
     rect(b.x, b.y, b.w, b.h, outline)
@@ -190,6 +245,16 @@ local function click_buttons(buttons, mx, my)
     return false
 end
 
+-- Two rows of two equal buttons, centred at the bottom of the screen
+local function bottom_rows(W, H, S)
+    local bw, bh, gap = Theme.button_w * S, Theme.button_h * S, Theme.button_gap * S
+    local totalW = bw * 2 + gap
+    local bx = math.floor((W - totalW) / 2)
+    local row2Y = H - 10 * S - bh
+    local row1Y = row2Y - gap - bh
+    return bx, bw, bh, gap, row1Y, row2Y
+end
+
 -- ===========================================================================
 -- WORLD LIST SCREEN
 -- ===========================================================================
@@ -197,31 +262,27 @@ end
 local function list_layout(W, H)
     local S = gui_scale(W, H)
     local fs = Theme.font.base_scale * S
-    local bw, bh, gap = Theme.button_w * S, Theme.button_h * S, Theme.button_gap * S
+    local bx, bw, bh, gap, row1Y, row2Y = bottom_rows(W, H, S)
 
     local L = { S = S, fs = fs }
     L.titleY = 12 * S
+    L.messageY = L.titleY + text_height(fs) + 4 * S
     L.listW = math.min(Theme.list_w * S, W - 20 * S)
     L.listX = math.floor((W - L.listW) / 2)
-    L.listY = L.titleY + text_height(fs) + 10 * S
-
-    local bottom = 10 * S
-    local buttonsH = bh * 2 + gap
-    L.listH = H - L.listY - buttonsH - bottom - 10 * S
+    L.listY = L.messageY + text_height(fs) + 6 * S
+    L.listH = row1Y - 10 * S - L.listY
     L.rowH = Theme.row_h * S
     L.visible = math.max(1, math.floor(L.listH / L.rowH))
 
-    local row1Y = H - bottom - buttonsH
-    local row2Y = row1Y + bh + gap
-    local totalW = bw * 2 + gap
-    local bx = math.floor((W - totalW) / 2)
-
+    local has_sel = selected_world() ~= nil
     L.buttons = {
-        { x = bx,            y = row1Y, w = bw,     h = bh, label = "Play Selected World",
-          enabled = state.selected ~= nil, action = play_selected },
-        { x = bx + bw + gap, y = row1Y, w = bw,     h = bh, label = "Create New World",
-          enabled = true, action = open_create },
-        { x = bx,            y = row2Y, w = totalW, h = bh, label = "Back",
+        { x = bx,            y = row1Y, w = bw, h = bh, label = "Play Selected World",
+          enabled = has_sel and can_play(), action = play_selected },
+        { x = bx + bw + gap, y = row1Y, w = bw, h = bh, label = "Create New World",
+          enabled = can_play(), action = open_create },
+        { x = bx,            y = row2Y, w = bw, h = bh, label = "Delete",
+          enabled = has_sel, action = open_delete },
+        { x = bx + bw + gap, y = row2Y, w = bw, h = bh, label = "Back",
           enabled = true, action = function() engine.back_to_title() end },
     }
     return L
@@ -234,7 +295,22 @@ local function render_list(W, H)
     local worlds = state.worlds
 
     rect(0, 0, W, H, C.background)
-    text_centered("Select World", W / 2, L.titleY, fs, C.title, S)
+
+    local title = "Select World"
+    if state.game and state.game.title and state.game.title ~= "" then
+        title = title .. " - " .. state.game.title
+    end
+    text_centered(title, W / 2, L.titleY, fs, C.title, S)
+
+    -- Warning line: an error from the last action, or the wrong-game notice
+    local warning = state.message
+    if not warning and not can_play() then
+        warning = "This game isn't loaded. Restart with it selected to play its worlds."
+    end
+    if warning then
+        text_centered(warning, W / 2, L.messageY, fs * 0.85, C.warning, S)
+    end
+
     rect(L.listX, L.listY, L.listW, L.listH, C.list_bg)
 
     if #worlds == 0 then
@@ -280,7 +356,8 @@ local function click_list(mx, my, W, H)
             state.selected = i
             state.last_click_row = i
             state.last_click_time = now
-            if double then play_selected() end
+            state.message = nil
+            if double and can_play() then play_selected() end
         end
     end
 end
@@ -292,7 +369,7 @@ end
 local function create_layout(W, H)
     local S = gui_scale(W, H)
     local fs = Theme.font.base_scale * S
-    local bw, bh, gap = Theme.button_w * S, Theme.button_h * S, Theme.button_gap * S
+    local bx, bw, bh, gap, _, row2Y = bottom_rows(W, H, S)
     local fw, fh = Theme.field_w * S, Theme.field_h * S
     local fx = math.floor((W - fw) / 2)
 
@@ -304,13 +381,10 @@ local function create_layout(W, H)
     L.seedField = { x = fx, y = L.seedLabelY + text_height(fs) + 4 * S, w = fw, h = fh }
     L.hintY = L.seedField.y + fh + 4 * S
 
-    local rowY = H - 10 * S - bh
-    local totalW = bw * 2 + gap
-    local bx = math.floor((W - totalW) / 2)
     L.buttons = {
-        { x = bx,            y = rowY, w = bw, h = bh, label = "Create New World",
+        { x = bx,            y = row2Y, w = bw, h = bh, label = "Create New World",
           enabled = true, action = create_and_play },
-        { x = bx + bw + gap, y = rowY, w = bw, h = bh, label = "Cancel",
+        { x = bx + bw + gap, y = row2Y, w = bw, h = bh, label = "Cancel",
           enabled = true, action = function() state.mode = "list" end },
     }
     return L
@@ -345,12 +419,54 @@ local function click_create(mx, my, W, H)
 end
 
 -- ===========================================================================
+-- DELETE CONFIRMATION SCREEN
+-- ===========================================================================
+
+local function delete_layout(W, H)
+    local S = gui_scale(W, H)
+    local fs = Theme.font.base_scale * S
+    local bx, bw, bh, gap = bottom_rows(W, H, S)
+    local y = math.floor(H / 2 + 10 * S)
+
+    local L = { S = S, fs = fs }
+    L.titleY = math.floor(H / 2 - 40 * S)
+    L.line1Y = L.titleY + text_height(fs) + 10 * S
+    L.line2Y = L.line1Y + text_height(fs) + 4 * S
+    L.buttons = {
+        { x = bx,            y = y, w = bw, h = bh, label = "Delete",
+          enabled = true, danger = true, action = confirm_delete },
+        { x = bx + bw + gap, y = y, w = bw, h = bh, label = "Cancel",
+          enabled = true, action = function() state.mode = "list" end },
+    }
+    return L
+end
+
+local function render_delete(W, H)
+    local L = delete_layout(W, H)
+    local S, fs = L.S, L.fs
+    local mx, my = ui.get_mouse()
+    local w = selected_world()
+
+    rect(0, 0, W, H, C.background)
+    text_centered("Delete this world?", W / 2, L.titleY, fs, C.title, S)
+    text_centered("'" .. (w and w.name or "?") .. "' will be permanently deleted.", W / 2, L.line1Y, fs, C.detail, S)
+    text_centered("This cannot be undone.", W / 2, L.line2Y, fs, C.warning, S)
+
+    for _, b in ipairs(L.buttons) do draw_button(b, mx, my, S, fs) end
+end
+
+local function click_delete(mx, my, W, H)
+    click_buttons(delete_layout(W, H).buttons, mx, my)
+end
+
+-- ===========================================================================
 -- ENTRY POINTS (called from C++)
 -- ===========================================================================
 
 function on_world_select_opened()
     state.mode = "list"
     state.scroll = 0
+    state.message = nil
     refresh_worlds()
 end
 
@@ -358,11 +474,15 @@ function render_world_select(W, H)
     if not ui or not ui.draw_rect then return end
     if not state.worlds then refresh_worlds() end
 
-    if state.mode == "create" then render_create(W, H) else render_list(W, H) end
+    if state.mode == "create" then render_create(W, H)
+    elseif state.mode == "delete" then render_delete(W, H)
+    else render_list(W, H) end
 end
 
 function handle_world_select_click(mx, my, W, H)
-    if state.mode == "create" then click_create(mx, my, W, H) else click_list(mx, my, W, H) end
+    if state.mode == "create" then click_create(mx, my, W, H)
+    elseif state.mode == "delete" then click_delete(mx, my, W, H)
+    else click_list(mx, my, W, H) end
     return true
 end
 
@@ -375,6 +495,12 @@ end
 
 function handle_world_select_key(key, action, mods)
     local press = action == ui.actions.PRESS or action == ui.actions.REPEAT
+
+    if state.mode == "delete" then
+        -- Escape cancels. Enter does nothing here on purpose: deleting needs a click.
+        if press and key == ui.keys.ESCAPE then state.mode = "list" end
+        return true
+    end
 
     if state.mode == "create" then
         if not press then return true end
@@ -390,7 +516,8 @@ function handle_world_select_key(key, action, mods)
         return true
     end
 
-    -- List screen: arrows move the selection, Enter plays, Escape falls through (back to title)
+    -- List screen: arrows move the selection, Enter plays, Delete asks to delete,
+    -- Escape falls through to C++ (back to the title screen)
     if not press then return false end
     local count = state.worlds and #state.worlds or 0
     if key == ui.keys.UP and count > 0 then
@@ -400,7 +527,10 @@ function handle_world_select_key(key, action, mods)
         state.selected = clamp((state.selected or 0) + 1, 1, count)
         return true
     elseif key == ui.keys.ENTER or key == ui.keys.KP_ENTER then
-        play_selected()
+        if can_play() then play_selected() end
+        return true
+    elseif key == ui.keys.DELETE then
+        open_delete()
         return true
     end
     return false

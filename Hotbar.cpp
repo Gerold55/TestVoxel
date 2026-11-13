@@ -329,6 +329,28 @@ void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, fl
     const float scale = box * kIconScale + kIconGrowPx;
     const glm::vec3 tint = prop.defaultTint;
 
+    // inventory_image: flat picture, drawn as-is (no tint, no overlay)
+    if (prop.inventoryLayer >= 0) {
+        const float h = scale * 0.6f;
+        const float x0 = cx - h, x1 = cx + h, y0 = cy - h, y1 = cy + h;
+        const float z = -5.0f;
+        const float layer = static_cast<float>(prop.inventoryLayer);
+
+        auto pv = [&](float x, float y, float u, float v) {
+            const float vtx[13] = { x, y, z, 1.0f, 1.0f, 1.0f, u, v,
+                                    layer, -1.0f, 0.0f, 0.0f, 1.0f };
+            out.insert(out.end(), vtx, vtx + 13);
+        };
+
+        pv(x0, y1, 0.0f, 1.0f);
+        pv(x1, y1, 1.0f, 1.0f);
+        pv(x1, y0, 1.0f, 0.0f);
+        pv(x0, y1, 0.0f, 1.0f);
+        pv(x1, y0, 1.0f, 0.0f);
+        pv(x0, y0, 0.0f, 0.0f);
+        return;
+    }
+
     if (prop.pattern == "plantlike") {
         const float h = scale * 0.5f;
         const float x0 = cx - h, x1 = cx + h, y0 = cy - h, y1 = cy + h;

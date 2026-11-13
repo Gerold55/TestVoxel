@@ -9,7 +9,7 @@ local function loadScript(name)
         return false, "Invalid script name"
     end
 
-    -- Security Check: Block path traversal sequences (".."), 
+    -- Security Check: Block path traversal sequences (".."),
     -- absolute paths, or Windows drive letters.
     if name:find("%.%.") or name:match("^/") or name:match("^[a-zA-Z]:") then
         print("[Security Warning] Path traversal attempt detected in loadScript: " .. name)
@@ -19,12 +19,17 @@ local function loadScript(name)
     local fullPath = modPath .. "/" .. name
     local ok, err = pcall(dofile, fullPath)
     if not ok then
+        -- Never fail silently: say which script broke and why
+        print("[Mod] FAILED to load " .. fullPath .. ": " .. tostring(err))
         return false, err
     end
+    print("[Mod] Loaded " .. fullPath)
     return true
 end
 
-loadScript("fog.lua")      -- fog settings
-loadScript("menu.lua")     -- main menu
-loadScript("chat.lua")     -- chat commands
-loadScript("world_select.lua")     -- world selection
+loadScript("fog.lua")           -- fog settings
+loadScript("chat.lua")          -- chat commands
+loadScript("mods_menu.lua")     -- mods menu
+loadScript("texture_packs.lua") -- texture pack picker
+loadScript("settings_menu.lua") -- settings (controls, video)
+loadScript("world_select.lua")  -- world selection
