@@ -27,3 +27,4 @@ end
 loadScript("fog.lua")      -- fog settings
 loadScript("menu.lua")     -- main menu
 loadScript("chat.lua")     -- chat commands
+loadScript("world_select.lua")     -- world selection

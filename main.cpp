@@ -19,6 +19,11 @@
 #include <fstream>
 #include <sstream>
 #include <exception>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <iomanip>
+#include <random>
 
 #include "Types.h"
 #include "Block.h"
@@ -81,6 +86,7 @@ float g_FieldOfView = 70.0f;
 FogSettings g_Fog;
 UnderwaterSettings g_Underwater;
 float g_UnderwaterBlend = 0.0f;
+bool g_Paused = false;   // pause menu open (drawn by pause_menu.lua)
 
 // Loading screen state
 bool g_SpawnPlaced = false;
@@ -96,6 +102,7 @@ struct WaterColors {
 
 enum class GameState {
     MENU,
+    WORLD_SELECT,   // singleplayer world list (drawn by world_select.lua)
     LOADING,
     PLAYING
 };
@@ -183,6 +190,263 @@ std::vector<std::string> getAvailableWorlds() {
     }
     if (worlds.empty()) worlds.push_back("world_alpha");
     return worlds;
+}
+
+// ===========================================================================
+// World saves
+//   saves/<name>/world.dat      seed, player position/look, hotbar (text key=value)
+//   saves/<name>/chunks/*.bin   chunks that were changed (written by World)
+// ===========================================================================
+
+Player* g_PlayerInstance = nullptr;
+bool g_PendingWorldOpen = false;          // open g_ActiveWorldName at the start of LOADING
+double g_LastAutosave = 0.0;
+constexpr double kAutosaveSeconds = 120.0;
+
+fs::path savesRoot() {
+    if (!fs::exists("saves") && fs::exists("../../saves")) return fs::path("../../saves");
+    return fs::path("saves");
+}
+
+uint32_t randomSeed() {
+    std::random_device rd;
+    return rd() ^ (rd() << 16);
+}
+
+// Empty -> random. A number -> that number. Any other text -> a hash of it.
+uint32_t seedFromText(std::string t) {
+    while (!t.empty() && std::isspace(static_cast<unsigned char>(t.back()))) t.pop_back();
+    while (!t.empty() && std::isspace(static_cast<unsigned char>(t.front()))) t.erase(t.begin());
+    if (t.empty()) return randomSeed();
+
+    const bool numeric = t.size() <= 10 &&
+        std::all_of(t.begin(), t.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+    if (numeric) {
+        const unsigned long long v = std::stoull(t);
+        if (v <= 0xFFFFFFFFull) return static_cast<uint32_t>(v);
+    }
+
+    uint32_t h = 2166136261u;   // FNV-1a
+    for (unsigned char c : t) { h ^= c; h *= 16777619u; }
+    return h;
+}
+
+// Keeps letters, digits, spaces, '-' and '_' so the name is a safe folder name.
+std::string sanitizeWorldName(const std::string& raw) {
+    std::string out;
+    for (unsigned char c : raw) {
+        if (std::isalnum(c) || c == ' ' || c == '-' || c == '_') out.push_back(static_cast<char>(c));
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+    if (out.empty()) out = "New World";
+    if (out.size() > 32) out.resize(32);
+    return out;
+}
+
+struct WorldMeta {
+    bool valid = false;
+    uint32_t seed = 0;
+    bool hasPlayer = false;
+    glm::vec3 position{0.0f};
+    float yaw = 0.0f, pitch = 0.0f;
+    std::vector<std::pair<std::string, int>> hotbar;   // block name ("" = empty), count
+};
+
+bool readWorldMeta(const fs::path& file, WorldMeta& meta) {
+    std::ifstream in(file);
+    if (!in) return false;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        const std::string key = line.substr(0, eq);
+        std::istringstream val(line.substr(eq + 1));
+
+        if (key == "seed") {
+            val >> meta.seed;
+            meta.valid = !val.fail();
+        } else if (key == "player") {
+            val >> meta.position.x >> meta.position.y >> meta.position.z;
+            meta.hasPlayer = !val.fail();
+        } else if (key == "look") {
+            val >> meta.yaw >> meta.pitch;
+        } else if (key.rfind("hotbar", 0) == 0) {
+            const int idx = std::atoi(key.c_str() + 6);
+            std::string name;
+            int count = 0;
+            val >> name >> count;
+            if (idx >= 1 && idx <= 64) {
+                if (static_cast<int>(meta.hotbar.size()) < idx) meta.hotbar.resize(idx);
+                meta.hotbar[idx - 1] = { name == "-" ? "" : name, count };
+            }
+        }
+    }
+    return meta.valid;
+}
+
+bool writeWorldMeta(const fs::path& file, uint32_t seed, const Player* player) {
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    const fs::path tmp = file.string() + ".tmp";
+
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out) return false;
+        out << std::fixed << std::setprecision(3);
+        out << "version=1\n";
+        out << "seed=" << seed << "\n";
+        if (player) {
+            out << "player=" << player->position.x << " " << player->position.y << " " << player->position.z << "\n";
+            out << "look=" << player->yaw << " " << player->pitch << "\n";
+        }
+        if (g_Hotbar) {
+            for (int i = 0; i < g_Hotbar->slotCount; ++i) {
+                const HotbarSlot s = g_Hotbar->getSlot(i);
+                const std::string name = s.blockId ? BlockRegistry::getInstance().getBlock(s.blockId).name : "-";
+                out << "hotbar" << (i + 1) << "=" << name << " " << (s.blockId ? s.count : 0) << "\n";
+            }
+        }
+        if (!out) return false;
+    }
+
+    fs::rename(tmp, file, ec);
+    if (ec) {
+        fs::remove(file, ec);
+        fs::rename(tmp, file, ec);
+    }
+    return !ec;
+}
+
+// Writes changed chunks + world.dat for the world that is currently open.
+void saveCurrentWorld() {
+    World* w = g_WorldInstance;
+    if (!w || w->saveDirectory().empty()) return;
+
+    const int written = w->saveAll();
+    const bool metaOk = writeWorldMeta(fs::path(w->saveDirectory()) / "world.dat", w->seed(), g_PlayerInstance);
+    std::cout << "[Save] Saved '" << g_ActiveWorldName << "' (" << written << " changed chunks"
+              << (metaOk ? "" : ", world.dat FAILED") << ")" << std::endl;
+}
+
+// Opens g_ActiveWorldName: creates it if new, otherwise restores seed, player and hotbar.
+void openActiveWorld(World& world, Player& player) {
+    const fs::path dir = savesRoot() / g_ActiveWorldName;
+    std::error_code ec;
+    fs::create_directories(dir / "chunks", ec);
+
+    WorldMeta meta;
+    const bool existing = readWorldMeta(dir / "world.dat", meta);
+
+    world.reset();
+    world.setSaveDirectory(dir.string());
+    world.setSeed(existing ? meta.seed : randomSeed());
+
+    // Hotbar: empty, then restore what was saved
+    if (g_Hotbar) {
+        for (int i = 0; i < g_Hotbar->slotCount; ++i) g_Hotbar->setSlot(i, 0, 0);
+        for (size_t i = 0; i < meta.hotbar.size() && static_cast<int>(i) < g_Hotbar->slotCount; ++i) {
+            const auto& entry = meta.hotbar[i];
+            if (entry.first.empty()) continue;
+            const uint8_t id = BlockRegistry::getInstance().getBlockId(entry.first);
+            if (id != 0) g_Hotbar->setSlot(static_cast<int>(i), id, entry.second > 0 ? entry.second : 64);
+        }
+    }
+
+    // Player: saved position, or a fresh spawn (LOADING finds the ground)
+    if (existing && meta.hasPlayer) {
+        player.position = meta.position;
+        player.yaw = meta.yaw;
+        player.pitch = meta.pitch;
+        g_SpawnPlaced = true;
+    } else {
+        player.position = glm::vec3(8.0f, 100.0f, 8.0f);
+        g_SpawnPlaced = false;
+    }
+
+    // Make sure the seed is on disk straight away
+    writeWorldMeta(dir / "world.dat", world.seed(), (existing && meta.hasPlayer) ? &player : nullptr);
+    g_LastAutosave = glfwGetTime();
+
+    std::cout << "[World] " << (existing ? "Loaded" : "Created") << " world '" << g_ActiveWorldName
+              << "' (seed " << world.seed() << ")" << std::endl;
+}
+
+// Switches to the loading screen; the world itself is opened from the main loop.
+void beginLoadingWorld(GLFWwindow* win) {
+    g_CurrentGameState = GameState::LOADING;
+    g_PendingWorldOpen = true;
+    g_SpawnPlaced = false;
+    g_LoadStartTime = glfwGetTime();
+    g_LoadingProgress = 0.0f;
+    g_Paused = false;
+    glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+}
+
+struct SavedWorldInfo {
+    std::string name;
+    std::string seed;
+    fs::file_time_type lastPlayed;
+};
+
+// Every folder in saves/, most recently played first.
+std::vector<SavedWorldInfo> listSavedWorlds() {
+    std::vector<SavedWorldInfo> list;
+    const fs::path root = savesRoot();
+    std::error_code ec;
+    if (!fs::exists(root, ec)) return list;
+
+    for (const auto& entry : fs::directory_iterator(root, ec)) {
+        if (!entry.is_directory()) continue;
+        SavedWorldInfo info;
+        info.name = entry.path().filename().string();
+
+        WorldMeta meta;
+        const fs::path dat = entry.path() / "world.dat";
+        info.seed = readWorldMeta(dat, meta) ? std::to_string(meta.seed) : "?";
+        info.lastPlayed = fs::exists(dat, ec) ? fs::last_write_time(dat, ec) : fs::last_write_time(entry.path(), ec);
+        list.push_back(info);
+    }
+
+    std::sort(list.begin(), list.end(),
+              [](const SavedWorldInfo& a, const SavedWorldInfo& b) { return a.lastPlayed > b.lastPlayed; });
+    return list;
+}
+
+// Creates saves/<name>/ with a world.dat holding the seed. Returns the folder name used.
+std::string createWorld(const std::string& rawName, const std::string& seedText) {
+    const std::string base = sanitizeWorldName(rawName);
+    std::string name = base;
+    for (int n = 2; fs::exists(savesRoot() / name); ++n) {
+        name = base + " (" + std::to_string(n) + ")";
+    }
+
+    std::error_code ec;
+    fs::create_directories(savesRoot() / name / "chunks", ec);
+    writeWorldMeta(savesRoot() / name / "world.dat", seedFromText(seedText), nullptr);
+    std::cout << "[World] Created save folder '" << name << "'" << std::endl;
+    return name;
+}
+
+// Calls a Lua UI function if it exists. Returns true only if it returned true.
+template <typename... Args>
+bool callLuaUI(sol::state* lua, const char* fn, Args&&... args) {
+    if (!lua) return false;
+    try {
+        sol::protected_function f = (*lua)[fn];
+        if (!f.valid()) return false;
+        sol::protected_function_result r = f(std::forward<Args>(args)...);
+        if (!r.valid()) {
+            sol::error err = r;
+            std::cerr << "[Lua] " << fn << ": " << err.what() << std::endl;
+            return false;
+        }
+        if (r.return_count() > 0 && r.get_type() == sol::type::boolean) return r.get<bool>();
+    } catch (...) {}
+    return false;
 }
 
 struct EngineContext {
@@ -773,18 +1037,44 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     if (g_ChatSystem && g_ChatSystem->isOpen) return;
     EngineContext* ctx = static_cast<EngineContext*>(glfwGetWindowUserPointer(window));
-    if (ctx && ctx->player) {
-        if (!g_Hotbar || !g_Inventory.isCreativeOpen()) {
-            if (yoffset > 0) g_Hotbar->previousSlot();
-            else if (yoffset < 0) g_Hotbar->nextSlot();
-        } else {
-            try {
-                sol::state* lua = ctx->lua;
+    if (!ctx || !ctx->player) return;
+
+    if (g_CurrentGameState == GameState::WORLD_SELECT) {
+        callLuaUI(ctx->lua, "handle_world_select_scroll", yoffset);
+        return;
+    }
+
+    if (g_Inventory.isCreativeOpen()) {
+        // Creative inventory open: scroll its item grid (handled in inventory.lua)
+        g_Inventory.handleCreativeScroll(yoffset);
+
+        try {
+            sol::state* lua = ctx->lua;
+            if (lua) {
                 sol::function scrollLua = (*lua)["on_scroll_input"];
                 if (scrollLua.valid()) scrollLua(xoffset, yoffset);
-            } catch (...) {}
-        }
+            }
+        } catch (...) {}
+        return;
     }
+
+    if (g_Hotbar) {
+        if (yoffset > 0) g_Hotbar->previousSlot();
+        else if (yoffset < 0) g_Hotbar->nextSlot();
+    }
+}
+
+// Puts OpenGL into a clean state for 2D UI and text (menus, loading screen, chat).
+void resetUIRenderState() {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glBindVertexArray(0);
 }
 
 void drawLoadingScreen(GLuint uiProgram, GLuint fontProgram, float progress, int width, int height) {
@@ -843,7 +1133,7 @@ int main() {
         GLFWwindow* window = glfwCreateWindow(1280, 720, "Craft & Ruin - Voxel Engine", NULL, NULL);
         if (!window) { glfwTerminate(); return -1; }
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(60);
+        glfwSwapInterval(1); // vsync (1 = once per screen refresh)
 
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
             std::cerr << "[Error] Failed to initialize GLAD\n";
@@ -874,7 +1164,22 @@ int main() {
                 g_ChatSystem->handleCharInput(codepoint);
                 return;
             }
+
+            // Creative inventory search box (inventory.lua decides if it wants the character)
+            if (g_CurrentGameState == GameState::PLAYING && g_Inventory.handleCreativeChar(codepoint)) {
+                return;
+            }
+
             EngineContext* c = static_cast<EngineContext*>(glfwGetWindowUserPointer(win));
+
+            // World select screen text fields (world name / seed)
+            if (g_CurrentGameState == GameState::WORLD_SELECT) {
+                std::string ch;
+                if (codepoint < 128) ch.push_back(static_cast<char>(codepoint));
+                if (c) callLuaUI(c->lua, "handle_world_select_char", static_cast<int>(codepoint), ch);
+                return;
+            }
+
             if (c && c->lua) {
                 try {
                     sol::state* lua = c->lua;
@@ -893,12 +1198,34 @@ int main() {
                 return;
             }
 
+            // While typing in the creative search box, inventory.lua gets the keys first
+            // (so 'E', 'T' or Escape don't close the inventory / open chat mid-typing).
+            if (g_CurrentGameState == GameState::PLAYING && g_Inventory.handleCreativeKey(key, action, mods)) {
+                return;
+            }
+
+            // World select: Lua gets the key first; otherwise Escape goes back to the title
+            if (g_CurrentGameState == GameState::WORLD_SELECT) {
+                if (callLuaUI(c->lua, "handle_world_select_key", key, action, mods)) return;
+                if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) g_CurrentGameState = GameState::MENU;
+                return;
+            }
+
             if (g_CurrentGameState == GameState::MENU && action == GLFW_PRESS) {
                 if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(win, true);
                 return;
             }
 
             if (g_CurrentGameState == GameState::PLAYING && action == GLFW_PRESS) {
+                // While paused, only Escape does anything (it resumes the game)
+                if (g_Paused) {
+                    if (key == GLFW_KEY_ESCAPE) {
+                        g_Paused = false;
+                        glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    }
+                    return;
+                }
+
                 if (key == GLFW_KEY_T || key == GLFW_KEY_SLASH) {
                     g_ChatSystem->openChat(win, key);
                     return;
@@ -910,7 +1237,7 @@ int main() {
                     int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
                     if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                     else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    
+
                     try {
                         sol::state* lua = c->lua;
                         sol::function toggleInv = (*lua)["toggle_main_inventory"];
@@ -920,14 +1247,14 @@ int main() {
                 }
 
                 if (key == GLFW_KEY_ESCAPE) {
+                    // Escape closes the inventory first; otherwise it opens the pause menu
                     if (g_Inventory.isCreativeOpen()) {
                         g_Inventory.setCreativeOpen(false);
                         glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                         return;
                     }
-                    int currentMode = glfwGetInputMode(win, GLFW_CURSOR);
-                    if (currentMode == GLFW_CURSOR_DISABLED) glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                    else glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    g_Paused = true;
+                    glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                 }
             }
         });
@@ -968,9 +1295,11 @@ int main() {
         glAttachShader(modelShaderProgram, compileShader(GL_FRAGMENT_SHADER, modelFragmentShaderSource));
         glLinkProgram(modelShaderProgram);
 
-        // Minimal UI table for basic callbacks
+        // ------------------------------------------------------------------
+        // ui.* table
+        // ------------------------------------------------------------------
         auto uiTable = lua.create_named_table("ui");
-        
+
         uiTable["get_mouse_pos"] = [window]() {
             double x, y;
             glfwGetCursorPos(window, &x, &y);
@@ -980,12 +1309,45 @@ int main() {
             return std::make_tuple(x, y);
         };
 
-        uiTable["draw_text"] = [&](const std::string& text, float x, float y, float r, float g, float b) {
-            if (g_FontRenderer) {
-                Dimensions2D windowSize;
-                glfwGetFramebufferSize(window, &windowSize.width, &windowSize.height);
-                g_FontRenderer->renderText(fontProgram, text, x, y, 1.0f, 1.0f, glm::vec4(r, g, b, 1.0f), windowSize);
+        // Adds ui.draw_rect, ui.draw_block_icon, ui.get_all_blocks, ui.get_block_info,
+        // ui.get_time, ui.keys, ui.actions (and a 0-based hotbar.* that gets replaced below).
+        g_Inventory.registerLuaBindings(lua);
+
+        // ui.draw_text - uses the real font shader. Supports both call styles:
+        //   ui.draw_text(text, x, y, r, g, b)                    (old style, scale 1)
+        //   ui.draw_text(text, x, y, scale, r, g, b [, a])       (new style)
+        uiTable["draw_text"] = [&](const std::string& text, float x, float y, sol::variadic_args va) {
+            if (!g_FontRenderer) return;
+
+            std::vector<float> v;
+            for (auto arg : va) v.push_back(arg.as<float>());
+
+            float scale = 1.0f, r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f;
+            if (v.size() == 3) {
+                r = v[0]; g = v[1]; b = v[2];
+            } else if (v.size() >= 4) {
+                scale = v[0]; r = v[1]; g = v[2]; b = v[3];
+                if (v.size() >= 5) a = v[4];
             }
+
+            Dimensions2D windowSize;
+            glfwGetFramebufferSize(window, &windowSize.width, &windowSize.height);
+
+            resetUIRenderState();
+            glUseProgram(fontProgram);
+            g_FontRenderer->renderText(fontProgram, text, x, y, scale, scale, glm::vec4(r, g, b, a), windowSize);
+        };
+
+        // ui.get_mouse() -> x, y, left_down, right_down   (framebuffer pixels, same as clicks)
+        uiTable["get_mouse"] = [window]() {
+            double x, y;
+            glfwGetCursorPos(window, &x, &y);
+            int fw, fh;
+            glfwGetFramebufferSize(window, &fw, &fh);
+            scaleCursorToFramebuffer(window, x, y, fw, fh);
+            const bool left  = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
+            const bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+            return std::make_tuple(x, y, left, right);
         };
 
         lua.new_usertype<Bone>("Bone",
@@ -998,18 +1360,34 @@ int main() {
             "get_bone", &AnimatedModel::getBone
         );
 
+        // ------------------------------------------------------------------
+        // hotbar.* table - ALL slot numbers are 1-based (Lua convention)
+        // ------------------------------------------------------------------
         sol::table hotbarTable = lua.create_named_table("hotbar");
         hotbarTable["set_size"] = [](int size) { if (g_Hotbar) g_Hotbar->resize(size); };
         hotbarTable["get_size"] = []() { return g_Hotbar ? g_Hotbar->slotCount : 9; };
+        hotbarTable["get_slot_count"] = []() { return g_Hotbar ? g_Hotbar->slotCount : 9; };
         hotbarTable["set_slot_size"] = [](float size) { if (g_Hotbar) g_Hotbar->slotSize = size; };
         hotbarTable["set_position"] = [](float x, float y) { if (g_Hotbar) { g_Hotbar->posX = x; g_Hotbar->posY = y; } };
-        hotbarTable["set_slot"] = [](int slotIndex, const std::string& blockName) {
-            if (g_Hotbar) {
-                uint8_t blockId = BlockRegistry::getInstance().getBlockId(blockName);
-                int adj = slotIndex - 1;
-                if (adj >= 0 && adj < g_Hotbar->slotCount) g_Hotbar->setSlot(adj, blockId, 64);
-            }
+
+        // hotbar.set_slot(slot, name [, count])  - name "" or "air" clears the slot
+        hotbarTable["set_slot"] = [](int slotIndex, const std::string& blockName, sol::optional<int> count) {
+            if (!g_Hotbar) return;
+            int adj = slotIndex - 1;
+            if (adj < 0 || adj >= g_Hotbar->slotCount) return;
+            uint8_t blockId = (blockName.empty() || blockName == "air")
+                ? 0 : BlockRegistry::getInstance().getBlockId(blockName);
+            g_Hotbar->setSlot(adj, blockId, blockId == 0 ? 0 : count.value_or(64));
         };
+
+        // hotbar.get_slot(slot) -> name, count   ("" and 0 when empty)
+        hotbarTable["get_slot"] = [](int slotIndex) {
+            if (!g_Hotbar) return std::make_tuple(std::string(), 0);
+            HotbarSlot slot = g_Hotbar->getSlot(slotIndex - 1);
+            if (slot.blockId == 0) return std::make_tuple(std::string(), 0);
+            return std::make_tuple(BlockRegistry::getInstance().getBlock(slot.blockId).name, slot.count);
+        };
+
         hotbarTable["get_active_slot"] = []() { return g_Hotbar ? g_Hotbar->activeSlot + 1 : 1; };
         hotbarTable["set_active_slot"] = [](int slotIndex) {
             if (g_Hotbar) {
@@ -1110,6 +1488,11 @@ int main() {
         fogTable["set_night_color"]  = [](float r, float g, float b) { g_Fog.nightColor = glm::vec3(r, g, b); };
 
         auto chatTable = lua.create_named_table("chat");
+        chatTable["register_command"] = [](const std::string& name,
+                                          const std::string& usage,
+                                          const std::string& description) {
+            if (g_ChatSystem) g_ChatSystem->registerCommand(name, usage, description);
+        };
         chatTable["send"] = [](const std::string& text,
                                sol::optional<float> r,
                                sol::optional<float> g,
@@ -1222,13 +1605,58 @@ int main() {
         engineTable["get_active_world"] = []() { return g_ActiveWorldName; };
         engineTable["set_active_world"] = [](std::string name) { g_ActiveWorldName = name; };
         engineTable["quit"] = [&]() { glfwSetWindowShouldClose(window, true); };
-        engineTable["start_game"] = [&]() {
-            g_CurrentGameState = GameState::LOADING;
-            g_SpawnPlaced = false;
-            g_LoadStartTime = glfwGetTime();
-            g_LoadingProgress = 0.0f;
+
+        // Pause menu controls (used by pause_menu.lua)
+        engineTable["is_paused"] = []() { return g_Paused; };
+        engineTable["pause"] = [window]() {
+            if (g_CurrentGameState != GameState::PLAYING) return;
+            g_Paused = true;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         };
+        engineTable["resume"] = [window]() {
+            g_Paused = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        };
+        engineTable["quit_to_menu"] = [window]() {
+            // Save, then unload the world so the next one starts clean
+            if (g_CurrentGameState == GameState::PLAYING) saveCurrentWorld();
+            if (g_WorldInstance) {
+                g_WorldInstance->reset();
+                g_WorldInstance->setSaveDirectory("");
+            }
+            g_Paused = false;
+            g_Inventory.setCreativeOpen(false);
+            g_CurrentGameState = GameState::MENU;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        };
+        engineTable["start_game"] = [window]() { beginLoadingWorld(window); };
+
+        // ---- World saves (used by world_select.lua) ----
+        // engine.list_worlds() -> { { name = "My World", seed = "123" }, ... }  newest first
+        engineTable["list_worlds"] = [&lua]() {
+            sol::table t = lua.create_table();
+            int idx = 1;
+            for (const auto& w : listSavedWorlds()) {
+                sol::table e = lua.create_table();
+                e["name"] = w.name;
+                e["seed"] = w.seed;
+                t[idx++] = e;
+            }
+            return t;
+        };
+        // engine.create_world(name, seedText) -> folder name actually used
+        engineTable["create_world"] = [](const std::string& name, sol::optional<std::string> seed) {
+            return createWorld(name, seed.value_or(""));
+        };
+        // engine.play_world(name) -> loads (or creates) that world
+        engineTable["play_world"] = [window](const std::string& name) {
+            g_ActiveWorldName = name;
+            beginLoadingWorld(window);
+        };
+        engineTable["save_world"] = []() {
+            if (g_CurrentGameState == GameState::PLAYING) saveCurrentWorld();
+        };
+        engineTable["back_to_title"] = []() { g_CurrentGameState = GameState::MENU; };
 
         World world;
         g_WorldInstance = &world;
@@ -1322,6 +1750,7 @@ int main() {
         player.position = glm::vec3(8.0f, 100.0f, 8.0f);
 
         ctx.player = &player; ctx.lua = &lua;
+        g_PlayerInstance = &player;
 
         glfwSetCursorPosCallback(window, [](GLFWwindow* win, double xpos, double ypos) {
             if (g_CurrentGameState == GameState::PLAYING) {
@@ -1347,18 +1776,30 @@ int main() {
                 if (g_CurrentGameState == GameState::MENU && g_MainMenu) {
                     std::string actionResult = g_MainMenu->handleMouseClick(mx, my, sw, sh);
                     if (actionResult == "play") {
-                        g_CurrentGameState = GameState::LOADING;
-                        g_SpawnPlaced = false;
-                        g_LoadStartTime = glfwGetTime();
-                        g_LoadingProgress = 0.0f;
-                        glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                        // Singleplayer -> world selection screen (world_select.lua)
+                        g_CurrentGameState = GameState::WORLD_SELECT;
+                        callLuaUI(ctx->lua, "on_world_select_opened");
                     } else if (actionResult == "quit") {
                         glfwSetWindowShouldClose(win, true);
                     }
+                } else if (g_CurrentGameState == GameState::WORLD_SELECT) {
+                    callLuaUI(ctx->lua, "handle_world_select_click", mx, my, sw, sh);
+                } else if (g_CurrentGameState == GameState::PLAYING && g_Paused) {
+                    // Forwarded to handle_pause_click in pause_menu.lua
+                    try {
+                        sol::protected_function clickFn = (*ctx->lua)["handle_pause_click"];
+                        if (clickFn.valid()) {
+                            sol::protected_function_result res = clickFn(mx, my, sw, sh);
+                            if (!res.valid()) {
+                                sol::error err = res;
+                                std::cerr << "[Pause Lua] handle_pause_click: " << err.what() << std::endl;
+                            }
+                        }
+                    } catch (...) {}
                 } else if (g_CurrentGameState == GameState::PLAYING && g_Inventory.isCreativeOpen()) {
-                    // Call native C++ inventory click handler
+                    // Forwarded to handle_creative_click in inventory.lua
                     g_Inventory.handleCreativeClick(mx, my, static_cast<float>(sw), static_cast<float>(sh));
-                    
+
                     try {
                         sol::state* lua = ctx->lua;
                         sol::function handleInvClick = (*lua)["handle_inventory_click"];
@@ -1394,6 +1835,11 @@ int main() {
             bool isCursorDisabled = (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED);
 
             if (g_CurrentGameState == GameState::LOADING) {
+                if (g_PendingWorldOpen) {
+                    g_PendingWorldOpen = false;
+                    openActiveWorld(world, player);
+                }
+
                 world.setLoadBudgetMs(40.0f);
                 world.setMeshBudgetMs(30.0f);
                 world.update(player.position, lua);
@@ -1425,6 +1871,12 @@ int main() {
             }
 
             if (g_CurrentGameState == GameState::PLAYING) {
+                // Autosave
+                if (glfwGetTime() - g_LastAutosave >= kAutosaveSeconds) {
+                    saveCurrentWorld();
+                    g_LastAutosave = glfwGetTime();
+                }
+
                 if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
                     for (int k = GLFW_KEY_1; k <= GLFW_KEY_9; ++k) {
                         if (glfwGetKey(window, k) == GLFW_PRESS) {
@@ -1511,10 +1963,27 @@ int main() {
                                     if (targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
                                         replaceTarget = true;
                                     }
-                                    glm::vec3 placePos = replaceTarget
-                                        ? glm::vec3(rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0))
-                                        : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
-                                    world.setBlockAt(glm::ivec3(static_cast<int>(placePos.x), static_cast<int>(placePos.y), static_cast<int>(placePos.z)), selectedBlock);
+                                    glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
+                                    const glm::ivec3 cell(static_cast<int>(std::floor(placePos.x + 0.5f)),
+                                                          static_cast<int>(std::floor(placePos.y + 0.5f)),
+                                                          static_cast<int>(std::floor(placePos.z + 0.5f)));
+
+                                    // Don't place a solid block where the player is standing (or jumping).
+                                    // Player box: 0.6 wide, 1.8 tall, feet at player.position.
+                                    constexpr float kHalfWidth = 0.3f;
+                                    constexpr float kHeight    = 1.8f;
+                                    constexpr float kEps       = 0.001f;   // touching is fine, overlapping isn't
+                                    const glm::vec3 pMin(player.position.x - kHalfWidth, player.position.y, player.position.z - kHalfWidth);
+                                    const glm::vec3 pMax(player.position.x + kHalfWidth, player.position.y + kHeight, player.position.z + kHalfWidth);
+                                    const bool overlapsPlayer =
+                                        pMin.x < cell.x + 1 - kEps && pMax.x > cell.x + kEps &&
+                                        pMin.y < cell.y + 1 - kEps && pMax.y > cell.y + kEps &&
+                                        pMin.z < cell.z + 1 - kEps && pMax.z > cell.z + kEps;
+                                    const bool solid = BlockRegistry::getInstance().getBlock(selectedBlock).isWalkable;
+
+                                    if (!(solid && overlapsPlayer)) {
+                                        world.setBlockAt(cell, selectedBlock);
+                                    }
                                 }
                             }
                         }
@@ -1742,10 +2211,12 @@ int main() {
                     glDrawArrays(GL_LINES, 0, 24);
                     glBindVertexArray(0);
 
-                    glEnable(GL_CULL_FACE);
+                    // Restore the state the rest of the frame expects (culling was off before)
+                    glDisable(GL_CULL_FACE);
                     glEnable(GL_BLEND);
                 }
 
+                // ---------------- HUD ----------------
                 glDisable(GL_DEPTH_TEST);
                 glUseProgram(uiProgram);
                 if (isCursorDisabled && (!g_ChatSystem || !g_ChatSystem->isOpen)) {
@@ -1755,18 +2226,10 @@ int main() {
                     glBindVertexArray(0);
                 }
 
+                // 1. Hotbar (background + 3D icons) - drawn BEFORE the inventory so the
+                //    creative inventory always sits on top of it.
                 g_Hotbar->updateBuffers(width, height);
                 g_Hotbar->renderSlots(uiProgram, texturedUIProgram);
-
-                // Render native C++ Creative Inventory
-                g_Inventory.renderCreativeInventory(window, lua, static_cast<float>(width), static_cast<float>(height), uiProgram, texturedUIProgram);
-
-                try {
-                    sol::function renderInvUI = lua["render_inventory"];
-                    if (renderInvUI.valid()) renderInvUI(width, height);
-                } catch (...) {}
-
-                if (g_ChatSystem) g_ChatSystem->renderChatOverlay(g_FontRenderer, fontProgram, width, height);
 
                 glEnable(GL_DEPTH_TEST);
                 glUseProgram(shaderProgram);
@@ -1776,10 +2239,45 @@ int main() {
                 glUniform1i(glGetUniformLocation(shaderProgram, "textureArray"), 0);
 
                 g_Hotbar->render3DIcons(shaderProgram, g_TextureArrayID);
-            } else if (g_CurrentGameState == GameState::LOADING) {
+
                 glDisable(GL_DEPTH_TEST);
+
+                // 2. Creative inventory (drawn by inventory.lua)
+                g_Inventory.renderCreativeInventory(window, lua, static_cast<float>(width), static_cast<float>(height), uiProgram, texturedUIProgram);
+                glDisable(GL_DEPTH_TEST);
+
+                // 3. Other Lua UI
+                try {
+                    sol::function renderInvUI = lua["render_inventory"];
+                    if (renderInvUI.valid()) renderInvUI(width, height);
+                } catch (...) {}
+
+                // 4. Pause menu (drawn by pause_menu.lua)
+                if (g_Paused) {
+                    g_Inventory.renderLuaScreen(window, lua, "render_pause_menu",
+                                                static_cast<float>(width), static_cast<float>(height),
+                                                uiProgram, texturedUIProgram);
+                    glDisable(GL_DEPTH_TEST);
+                }
+
+                // 5. Chat always on top
+                resetUIRenderState();
+                if (g_ChatSystem) g_ChatSystem->renderChatOverlay(g_FontRenderer, fontProgram, width, height);
+
+                glEnable(GL_DEPTH_TEST);
+            } else if (g_CurrentGameState == GameState::LOADING) {
+                resetUIRenderState();
                 drawLoadingScreen(uiProgram, fontProgram, g_LoadingProgress, width, height);
+            } else if (g_CurrentGameState == GameState::WORLD_SELECT) {
+                resetUIRenderState();
+                g_Inventory.renderLuaScreen(window, lua, "render_world_select",
+                                            static_cast<float>(width), static_cast<float>(height),
+                                            uiProgram, texturedUIProgram);
             } else {
+                // Gameplay leaves face culling / depth state behind, which hides the
+                // font when coming back to the title screen. Reset it every frame.
+                resetUIRenderState();
+
                 int sw, sh;
                 glfwGetFramebufferSize(window, &sw, &sh);
                 double mx, my;
@@ -1794,6 +2292,9 @@ int main() {
 
             glfwSwapBuffers(window);
         }
+
+        // Closing the window (or Quit Game) while playing saves the world first
+        if (g_CurrentGameState == GameState::PLAYING) saveCurrentWorld();
 
         glfwDestroyWindow(window);
         glfwTerminate();

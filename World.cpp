@@ -10,8 +10,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace {
@@ -23,6 +27,11 @@ constexpr int kMaxRenderDistance = 16;
 constexpr int kUnloadMargin = 2;              // chunks beyond render distance before unloading
 constexpr int kMaxFluidUpdatesPerTick = 256;
 constexpr float kChunkFadeSeconds = 0.6f;     // how long a new chunk takes to fully appear
+
+// Chunk save file format
+constexpr uint32_t kChunkMagic   = 0x32435856;  // "VXC2"
+constexpr uint16_t kChunkVersion = 1;
+constexpr int      kChunkCells   = CHUNK_WIDTH * CHUNK_HEIGHT * CHUNK_WIDTH;
 
 // Neighbor slots match ChunkMesh::getBlock():
 //   0 = +X, 1 = -X, 4 = +Z, 5 = -Z
@@ -68,6 +77,22 @@ glm::vec3 originOf(const World::ChunkCoord& c) {
     return glm::vec3(static_cast<float>(c.first * CHUNK_WIDTH),
                      0.0f,
                      static_cast<float>(c.second * CHUNK_WIDTH));
+}
+
+// Little-endian helpers for the chunk file format
+void put16(std::vector<uint8_t>& out, uint16_t v) {
+    out.push_back(static_cast<uint8_t>(v & 0xFF));
+    out.push_back(static_cast<uint8_t>(v >> 8));
+}
+void put32(std::vector<uint8_t>& out, uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+}
+uint16_t get16(const std::vector<uint8_t>& d, size_t p) {
+    return static_cast<uint16_t>(d[p] | (d[p + 1] << 8));
+}
+uint32_t get32(const std::vector<uint8_t>& d, size_t p) {
+    return static_cast<uint32_t>(d[p]) | (static_cast<uint32_t>(d[p + 1]) << 8) |
+           (static_cast<uint32_t>(d[p + 2]) << 16) | (static_cast<uint32_t>(d[p + 3]) << 24);
 }
 
 // Gribb-Hartmann frustum extraction from a combined projection * view matrix.
@@ -185,6 +210,11 @@ void World::markBlockChanged(const glm::ivec3& loc) {
     if (lz == CHUNK_WIDTH - 1) markMeshDirty(cx, cz + 1);
 }
 
+// Remembers that this chunk differs from its saved/generated state.
+void World::markModified(const glm::ivec3& loc) {
+    m_modified.insert(ChunkCoord{floorDiv(loc.x, CHUNK_WIDTH), floorDiv(loc.z, CHUNK_WIDTH)});
+}
+
 void World::linkChunk(int cx, int cz) {
     auto selfIt = chunks.find(ChunkCoord{cx, cz});
     if (selfIt == chunks.end()) return;
@@ -298,6 +328,12 @@ void World::unloadDistantChunks(int playerChunkX, int playerChunkZ) {
         const int dz = cz - playerChunkZ;
 
         if (std::max(std::abs(dx), std::abs(dz)) > limit) {
+            // Keep player changes: write the chunk out before throwing it away
+            if (m_modified.count(it->first)) {
+                saveChunkToDisk(it->first, *it->second);
+                m_modified.erase(it->first);
+            }
+
             unlinkChunk(cx, cz);                 // clear neighbor pointers before destroying
             m_meshQueue.erase(ChunkCoord{cx, cz});
             m_firstUpload.erase(ChunkCoord{cx, cz});
@@ -333,16 +369,24 @@ void World::processMeshQueue() {
 void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
     auto chunk = std::make_shared<ChunkMesh>();
 
-    sol::protected_function genFunc = lua["generate_chunk"];
-    if (genFunc.valid()) {
-        auto result = genFunc(chunk.get(), chunkX, chunkZ);
-        if (!result.valid()) {
-            sol::error err = result;
-            std::cerr << "[Mapgen Error]: " << err.what() << std::endl;
+    // 1. Saved chunk on disk? Use it instead of generating.
+    bool fromDisk = loadChunkFromDisk(chunkX, chunkZ, *chunk);
+
+    // 2. Otherwise generate it (Lua mapgen, or the C++ fallback).
+    if (!fromDisk) {
+        chunk = std::make_shared<ChunkMesh>();   // fresh, in case a broken file half-filled it
+
+        sol::protected_function genFunc = lua["generate_chunk"];
+        if (genFunc.valid()) {
+            auto result = genFunc(chunk.get(), chunkX, chunkZ);
+            if (!result.valid()) {
+                sol::error err = result;
+                std::cerr << "[Mapgen Error]: " << err.what() << std::endl;
+            }
+        } else {
+            generateFallbackTerrain(*chunk, chunkX, chunkZ,
+                                    static_cast<float>(m_seed % 100000) * 0.001f);
         }
-    } else {
-        generateFallbackTerrain(*chunk, chunkX, chunkZ,
-                                static_cast<float>(m_seed % 100000) * 0.001f);
     }
 
     chunks[ChunkCoord{chunkX, chunkZ}] = chunk;
@@ -354,6 +398,199 @@ void World::loadChunk(int chunkX, int chunkZ, sol::state& lua) {
     markMeshDirty(chunkX + 1, chunkZ);
     markMeshDirty(chunkX, chunkZ - 1);
     markMeshDirty(chunkX, chunkZ + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Saving / loading
+// ---------------------------------------------------------------------------
+
+void World::reset() {
+    chunks.clear();
+    m_loadQueue.clear();
+    m_meshQueue.clear();
+    m_firstUpload.clear();
+    m_activeFluids.clear();
+    m_modified.clear();
+    m_queueDirty = true;
+    m_luaSeeded = false;
+    m_playerChunk = ChunkCoord{0, 0};
+}
+
+int World::saveAll() {
+    if (m_saveDir.empty()) return 0;
+
+    int written = 0;
+    for (auto it = m_modified.begin(); it != m_modified.end();) {
+        auto cIt = chunks.find(*it);
+        if (cIt != chunks.end() && saveChunkToDisk(*it, *cIt->second)) {
+            ++written;
+            it = m_modified.erase(it);
+        } else if (cIt == chunks.end()) {
+            it = m_modified.erase(it);   // already unloaded (and saved then)
+        } else {
+            ++it;                        // write failed - keep it for the next try
+        }
+    }
+    return written;
+}
+
+std::string World::chunkPath(int cx, int cz) const {
+    const std::string name = "c." + std::to_string(cx) + "." + std::to_string(cz) + ".bin";
+    return (std::filesystem::path(m_saveDir) / "chunks" / name).string();
+}
+
+// File layout (little-endian):
+//   u32 magic, u16 version, u16 width, u16 height
+//   u16 paletteCount, then per entry: u8 id, u8 nameLength, name bytes
+//   runs until the chunk is full: u16 count, u8 blockId, u8 metadata
+// Cells are stored y-major, then z, then x.
+// The palette stores block NAMES, so saves still load correctly if mods
+// are added/removed and block ids shift.
+bool World::saveChunkToDisk(const ChunkCoord& c, const ChunkMesh& chunk) const {
+    if (m_saveDir.empty()) return false;
+
+    auto& registry = BlockRegistry::getInstance();
+
+    // Run-length encode (id, meta) pairs
+    std::vector<uint8_t> runs;
+    runs.reserve(4096);
+    bool used[256] = {};
+
+    uint16_t runLen = 0;
+    uint8_t runId = 0, runMeta = 0;
+    auto flush = [&]() {
+        if (runLen == 0) return;
+        put16(runs, runLen);
+        runs.push_back(runId);
+        runs.push_back(runMeta);
+    };
+
+    for (int y = 0; y < CHUNK_HEIGHT; ++y) {
+        for (int z = 0; z < CHUNK_WIDTH; ++z) {
+            for (int x = 0; x < CHUNK_WIDTH; ++x) {
+                const uint8_t id = chunk.getBlock(x, y, z);
+                const uint8_t meta = chunk.getMetadata(x, y, z);
+                used[id] = true;
+                if (runLen > 0 && id == runId && meta == runMeta && runLen < 0xFFFF) {
+                    ++runLen;
+                } else {
+                    flush();
+                    runId = id;
+                    runMeta = meta;
+                    runLen = 1;
+                }
+            }
+        }
+    }
+    flush();
+
+    // Header + palette
+    std::vector<uint8_t> out;
+    out.reserve(runs.size() + 512);
+    put32(out, kChunkMagic);
+    put16(out, kChunkVersion);
+    put16(out, static_cast<uint16_t>(CHUNK_WIDTH));
+    put16(out, static_cast<uint16_t>(CHUNK_HEIGHT));
+
+    std::vector<uint8_t> paletteIds;
+    for (int id = 1; id < 256; ++id) if (used[id]) paletteIds.push_back(static_cast<uint8_t>(id));
+    put16(out, static_cast<uint16_t>(paletteIds.size()));
+    for (uint8_t id : paletteIds) {
+        std::string name = registry.getBlock(id).name;
+        if (name.size() > 255) name.resize(255);
+        out.push_back(id);
+        out.push_back(static_cast<uint8_t>(name.size()));
+        out.insert(out.end(), name.begin(), name.end());
+    }
+    out.insert(out.end(), runs.begin(), runs.end());
+
+    // Write to a temp file, then swap it in, so a crash mid-write can't corrupt the save
+    namespace fs = std::filesystem;
+    const std::string finalPath = chunkPath(c.first, c.second);
+    const std::string tmpPath = finalPath + ".tmp";
+    std::error_code ec;
+    fs::create_directories(fs::path(finalPath).parent_path(), ec);
+
+    {
+        std::ofstream f(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            std::cerr << "[Save] Could not write " << tmpPath << std::endl;
+            return false;
+        }
+        f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+        if (!f) {
+            std::cerr << "[Save] Write failed for " << tmpPath << std::endl;
+            return false;
+        }
+    }
+
+    fs::rename(tmpPath, finalPath, ec);
+    if (ec) {
+        fs::remove(finalPath, ec);
+        fs::rename(tmpPath, finalPath, ec);
+        if (ec) {
+            std::cerr << "[Save] Could not replace " << finalPath << ": " << ec.message() << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool World::loadChunkFromDisk(int cx, int cz, ChunkMesh& chunk) const {
+    if (m_saveDir.empty()) return false;
+
+    std::ifstream f(chunkPath(cx, cz), std::ios::binary);
+    if (!f) return false;   // never saved - generate it instead
+
+    std::vector<uint8_t> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (d.size() < 12) return false;
+    if (get32(d, 0) != kChunkMagic || get16(d, 4) != kChunkVersion) return false;
+    if (get16(d, 6) != CHUNK_WIDTH || get16(d, 8) != CHUNK_HEIGHT) return false;
+
+    // Palette: saved id -> current id (looked up by name)
+    auto& registry = BlockRegistry::getInstance();
+    uint8_t remap[256] = {};   // unknown blocks become air
+    size_t p = 10;
+    const uint16_t paletteCount = get16(d, p);
+    p += 2;
+    for (uint16_t i = 0; i < paletteCount; ++i) {
+        if (p + 2 > d.size()) return false;
+        const uint8_t savedId = d[p];
+        const uint8_t len = d[p + 1];
+        p += 2;
+        if (p + len > d.size()) return false;
+        const std::string name(d.begin() + p, d.begin() + p + len);
+        p += len;
+        remap[savedId] = registry.getBlockId(name);
+        if (remap[savedId] == 0) {
+            std::cerr << "[Load] Unknown block '" << name << "' in chunk "
+                      << cx << "," << cz << " - replaced with air" << std::endl;
+        }
+    }
+
+    // Runs
+    int cell = 0;
+    while (cell < kChunkCells && p + 4 <= d.size()) {
+        const uint16_t count = get16(d, p);
+        const uint8_t id = remap[d[p + 2]];
+        const uint8_t meta = d[p + 3];
+        p += 4;
+
+        for (uint16_t i = 0; i < count && cell < kChunkCells; ++i, ++cell) {
+            if (id == 0 && meta == 0) continue;   // new chunks start as air
+            const int x = cell % CHUNK_WIDTH;
+            const int z = (cell / CHUNK_WIDTH) % CHUNK_WIDTH;
+            const int y = cell / (CHUNK_WIDTH * CHUNK_WIDTH);
+            chunk.setBlock(x, y, z, id);
+            if (meta != 0) chunk.setMetadata(x, y, z, meta);
+        }
+    }
+
+    if (cell != kChunkCells) {
+        std::cerr << "[Load] Chunk " << cx << "," << cz << " is damaged - regenerating it" << std::endl;
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +776,7 @@ void World::setBlockAt(const glm::ivec3& loc, uint8_t blockId) {
     chunk->setBlock(positiveMod(loc.x, CHUNK_WIDTH), loc.y,
                     positiveMod(loc.z, CHUNK_WIDTH), blockId);
     markBlockChanged(loc);
+    markModified(loc);
     noteFluidChange(loc);
 }
 
@@ -558,6 +796,7 @@ void World::setMetadataAt(const glm::ivec3& loc, uint8_t meta) {
     chunk->setMetadata(positiveMod(loc.x, CHUNK_WIDTH), loc.y,
                        positiveMod(loc.z, CHUNK_WIDTH), meta);
     markBlockChanged(loc);
+    markModified(loc);
 }
 
 // ---------------------------------------------------------------------------
