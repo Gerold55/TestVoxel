@@ -61,6 +61,8 @@ add_executable(VoxelEngine
     Clouds.h
     Fog.h
     Fog.cpp
+    Inventory.cpp
+    Inventory.h
     deps/glad.c
 )
 

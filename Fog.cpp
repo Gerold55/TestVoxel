@@ -1,4 +1,4 @@
-#include "Fog.h"
+#include "Fog.h" 
 #include <algorithm>          // For standard algorithms if needed
 
 // Blends sunset to day above the horizon, and to night below it.

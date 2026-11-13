@@ -4,6 +4,7 @@
 #include "ChatSystem.h"
 #include "FontRenderer.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
@@ -18,6 +19,7 @@ constexpr size_t kInputVisibleChars = 56;
 constexpr size_t kSentHistoryMax    = 50;
 constexpr size_t kLinesClosed       = 10;
 constexpr size_t kLinesOpen         = 14;
+constexpr size_t kMaxSuggestions    = 6;
 constexpr double kVisibleSeconds    = 10.0;
 constexpr double kFadeSeconds       = 1.0;
 
@@ -28,7 +30,7 @@ constexpr float kHotbarReserve = 115.0f;
 constexpr float kInputHeight    = 30.0f;
 constexpr float kLinePixelH     = 24.0f;
 constexpr float kTextInsetX     = 8.0f;
-constexpr float kLineTextDropY  = 8.0f;    // text offset from the top of each log line
+constexpr float kLineTextDropY  = 20.0f;    // text offset from the top of each log line
 constexpr float kInputTextDropY = 25.0f;   // text offset from the top of the input bar
 
 const glm::vec3 kPlayerColor(1.0f, 1.0f, 1.0f);
@@ -86,7 +88,27 @@ std::vector<std::string> wrapText(const std::string& text, size_t maxChars) {
     return out;
 }
 
+std::string toLower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+std::string trimLeft(const std::string& s) {
+    const size_t p = s.find_first_not_of(' ');
+    return p == std::string::npos ? std::string() : s.substr(p);
+}
+
+// "/name usage" with no trailing space when usage is empty.
+std::string commandLabel(const std::string& name, const std::string& usage) {
+    return "/" + name + (usage.empty() ? std::string() : " " + usage);
+}
+
 } // namespace
+
+ChatSystem::ChatSystem() {
+    registerCommand("help", "[command]", "List commands, or show details for one.");
+    registerCommand("clear", "", "Clear the chat log.");
+}
 
 ChatSystem::~ChatSystem() {
     if (glfwGetCurrentContext() == nullptr) return;
@@ -95,12 +117,53 @@ ChatSystem::~ChatSystem() {
     if (m_rectProgram) glDeleteProgram(m_rectProgram);
 }
 
+void ChatSystem::registerCommand(const std::string& name, const std::string& usage,
+                                 const std::string& description) {
+    std::string key = toLower(name);
+    if (!key.empty() && key[0] == '/') key.erase(0, 1);
+    if (key.empty()) return;
+
+    for (auto& c : m_commands) {
+        if (c.name == key) {
+            c.usage = usage;
+            c.description = description;
+            return;
+        }
+    }
+    m_commands.push_back(CommandInfo{key, usage, description});
+}
+
+std::vector<const ChatSystem::CommandInfo*> ChatSystem::matchingCommands() const {
+    std::vector<const CommandInfo*> out;
+    if (!isOpen || currentInput.empty() || currentInput[0] != '/') return out;
+
+    const std::string typed = toLower(currentInput.substr(1));
+    if (typed.find(' ') != std::string::npos) return out;   // already past the command name
+
+    for (const auto& c : m_commands) {
+        if (c.name.compare(0, typed.size(), typed) == 0) out.push_back(&c);
+    }
+    return out;
+}
+
+void ChatSystem::acceptSuggestion() {
+    const auto matches = matchingCommands();
+    if (matches.empty()) return;
+
+    const int n = static_cast<int>(matches.size());
+    const int idx = std::clamp(m_suggestSel, 0, n - 1);
+    currentInput = "/" + matches[static_cast<size_t>(idx)]->name + " ";
+    m_cursor = currentInput.size();
+    m_suggestSel = 0;
+}
+
 void ChatSystem::openChat(GLFWwindow* window, int triggerKey) {
     if (isOpen) return;
     isOpen = true;
     currentInput.clear();
     m_cursor = 0;
     m_historyIndex = -1;
+    m_suggestSel = 0;
     suppressNextChar = (triggerKey == GLFW_KEY_T);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 }
@@ -111,6 +174,7 @@ void ChatSystem::closeChat(GLFWwindow* window) {
     currentInput.clear();
     m_cursor = 0;
     m_historyIndex = -1;
+    m_suggestSel = 0;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 }
 
@@ -154,17 +218,20 @@ void ChatSystem::insertText(const std::string& text) {
         currentInput.insert(currentInput.begin() + static_cast<std::ptrdiff_t>(m_cursor), ch);
         ++m_cursor;
     }
+    m_suggestSel = 0;
 }
 
 void ChatSystem::deleteBack() {
     if (m_cursor == 0) return;
     currentInput.erase(m_cursor - 1, 1);
     --m_cursor;
+    m_suggestSel = 0;
 }
 
 void ChatSystem::deleteForward() {
     if (m_cursor >= currentInput.size()) return;
     currentInput.erase(m_cursor, 1);
+    m_suggestSel = 0;
 }
 
 void ChatSystem::handleKeyInput(int key, int scancode, int action, int mods, GLFWwindow* window) {
@@ -179,33 +246,54 @@ void ChatSystem::handleKeyInput(int key, int scancode, int action, int mods, GLF
     case GLFW_KEY_KP_ENTER:
         sendCurrentInput(window);
         break;
+
     case GLFW_KEY_ESCAPE:
         closeChat(window);
         break;
+
+    case GLFW_KEY_TAB:
+        acceptSuggestion();
+        break;
+
+    case GLFW_KEY_UP:
+    case GLFW_KEY_DOWN: {
+        // While suggestions are showing, Up/Down move the highlight. Otherwise they browse history.
+        const auto matches = matchingCommands();
+        if (!matches.empty()) {
+            const int n = static_cast<int>(matches.size());
+            const int step = (key == GLFW_KEY_UP) ? -1 : 1;
+            const int cur = std::clamp(m_suggestSel, 0, n - 1);
+            m_suggestSel = (cur + step + n) % n;
+        } else {
+            recallHistory(key == GLFW_KEY_UP ? +1 : -1);
+        }
+        break;
+    }
+
     case GLFW_KEY_BACKSPACE:
         deleteBack();
         break;
+
     case GLFW_KEY_DELETE:
         deleteForward();
         break;
+
     case GLFW_KEY_LEFT:
         if (m_cursor > 0) --m_cursor;
         break;
+
     case GLFW_KEY_RIGHT:
         if (m_cursor < currentInput.size()) ++m_cursor;
         break;
+
     case GLFW_KEY_HOME:
         m_cursor = 0;
         break;
+
     case GLFW_KEY_END:
         m_cursor = currentInput.size();
         break;
-    case GLFW_KEY_UP:
-        recallHistory(+1);
-        break;
-    case GLFW_KEY_DOWN:
-        recallHistory(-1);
-        break;
+
     case GLFW_KEY_V:
         if (ctrl) {
             if (const char* clip = glfwGetClipboardString(window)) {
@@ -217,6 +305,7 @@ void ChatSystem::handleKeyInput(int key, int scancode, int action, int mods, GLF
             }
         }
         break;
+
     default:
         break;
     }
@@ -234,6 +323,7 @@ void ChatSystem::recallHistory(int direction) {
         currentInput = m_sentHistory[m_sentHistory.size() - 1 - static_cast<size_t>(m_historyIndex)];
     }
     m_cursor = currentInput.size();
+    m_suggestSel = 0;
 }
 
 void ChatSystem::sendCurrentInput(GLFWwindow* window) {
@@ -255,21 +345,57 @@ void ChatSystem::sendCurrentInput(GLFWwindow* window) {
     closeChat(window);
 }
 
+// Lua gets the first look. Built-ins are the fallback.
 void ChatSystem::executeCommand(const std::string& cmd) {
     if (m_commandHandler && m_commandHandler(cmd)) return;
 
-    const std::string name = cmd.substr(0, cmd.find(' '));
+    const size_t sp = cmd.find(' ');
+    const std::string name = toLower(cmd.substr(0, sp));
+    const std::string args = (sp == std::string::npos) ? std::string() : trimLeft(cmd.substr(sp + 1));
 
+    if (name.empty()) return;
+
+    if (name == "help") {
+        showHelp(args);
+        return;
+    }
     if (name == "clear") {
         m_lines.clear();
         return;
     }
-    if (name == "help") {
-        addMessage("Built-in: /clear, /help. Mods add more through on_chat_command.", kSystemColor);
+
+    addMessage("Unknown command: /" + name + " (type /help for a list)", kErrorColor);
+}
+
+void ChatSystem::showHelp(const std::string& topicRaw) {
+    const std::string topic = toLower(topicRaw);
+
+    if (topic.empty()) {
+        addMessage("Type / to see suggestions. Press Tab to complete, Up/Down to choose.", kSystemColor);
+
+        std::vector<const CommandInfo*> sorted;
+        for (const auto& c : m_commands) sorted.push_back(&c);
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const CommandInfo* a, const CommandInfo* b) { return a->name < b->name; });
+
+        for (const CommandInfo* c : sorted) {
+            addMessage(commandLabel(c->name, c->usage) + "  -  " + c->description, kSystemColor);
+        }
+        addMessage("Use /help <command> for details.", kSystemColor);
         return;
     }
 
-    addMessage("Unknown command: /" + name, kErrorColor);
+    std::string key = topic;
+    if (!key.empty() && key[0] == '/') key.erase(0, 1);
+
+    for (const auto& c : m_commands) {
+        if (c.name == key) {
+            addMessage(commandLabel(c.name, c.usage), kSystemColor);
+            addMessage(c.description, kSystemColor);
+            return;
+        }
+    }
+    addMessage("No command named '" + key + "'.", kErrorColor);
 }
 
 void ChatSystem::ensureRectGpu() {
@@ -315,6 +441,8 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
     const float boxLeft  = W * 0.05f;
     const float boxWidth = W * 0.90f;
 
+    const float kPaddingY = 5.0f; // Extra vertical space top & bottom
+
     // The chat's bottom edge sits just above the hotbar.
     const float chatBottom = H - kHotbarReserve;
     const float inputTopY  = chatBottom - kInputHeight;
@@ -336,6 +464,7 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
 
     const double now = glfwGetTime();
 
+    // Input bar and caret.
     if (isOpen) {
         addRectTask(boxLeft, inputTopY, boxWidth, kInputHeight, glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
 
@@ -349,8 +478,29 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
         textTasks.push_back({display, boxLeft + kTextInsetX, inputTopY + kInputTextDropY, glm::vec4(1.0f)});
     }
 
-    // Log lines stack upward from the input bar when open, or from the hotbar line when closed.
-    const float baseY = isOpen ? inputTopY : chatBottom;
+    // Suggestion list, stacked directly above the input bar.
+    const auto matches = matchingCommands();
+    const int shown = static_cast<int>(std::min(matches.size(), kMaxSuggestions));
+    if (shown > 0) {
+        m_suggestSel = std::clamp(m_suggestSel, 0, shown - 1);
+    }
+    const float suggestTop = inputTopY - static_cast<float>(shown) * kLinePixelH;
+
+    for (int i = 0; i < shown; ++i) {
+        const CommandInfo* c = matches[static_cast<size_t>(i)];
+        const bool selected = (i == m_suggestSel);
+        const float y = suggestTop + static_cast<float>(i) * kLinePixelH;
+
+        addRectTask(boxLeft, y, boxWidth, kLinePixelH,
+                    selected ? glm::vec4(0.25f, 0.25f, 0.35f, 0.9f) : glm::vec4(0.0f, 0.0f, 0.0f, 0.6f));
+
+        const std::string label = commandLabel(c->name, c->usage) + "  -  " + c->description;
+        textTasks.push_back({label, boxLeft + kTextInsetX, y + kLineTextDropY,
+                             selected ? glm::vec4(1.0f, 1.0f, 0.6f, 1.0f) : glm::vec4(0.8f, 0.8f, 0.8f, 1.0f)});
+    }
+
+    // Log lines stack upward from the suggestions when open, or from the hotbar line when closed.
+    const float baseY = isOpen ? suggestTop : chatBottom;
     const size_t maxLines = isOpen ? kLinesOpen : kLinesClosed;
     size_t row = 0;
 
@@ -369,7 +519,8 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
         const float bgAlpha = (isOpen ? 0.5f : 0.35f) * alpha;
 
         addRectTask(boxLeft, lineTop, boxWidth, kLinePixelH, glm::vec4(0.0f, 0.0f, 0.0f, bgAlpha));
-        textTasks.push_back({it->text, boxLeft + kTextInsetX, lineTop + kLineTextDropY, glm::vec4(it->color, alpha)});
+        textTasks.push_back({it->text, boxLeft + kTextInsetX, lineTop + kLineTextDropY,
+                             glm::vec4(it->color, alpha)});
     }
 
     // Save state we change so the rest of the frame is unaffected.
