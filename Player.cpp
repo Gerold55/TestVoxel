@@ -1,6 +1,7 @@
 #include "Player.h"
 #include "World.h"
 #include "Block.h"
+#include "Settings.h"   // isActionDown(): controls follow the key bindings from Settings
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
@@ -57,6 +58,15 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
     }
 
     // --- 2. HANDLE INPUT & MOVEMENT DIRECTION ---
+    // Keys come from Settings > Controls (defaults: W/A/S/D, Space, Left Shift, Left Ctrl)
+    const bool keyForward = isActionDown(window, "forward");
+    const bool keyBack    = isActionDown(window, "back");
+    const bool keyLeft    = isActionDown(window, "left");
+    const bool keyRight   = isActionDown(window, "right");
+    const bool keyJump    = isActionDown(window, "jump");
+    const bool keySneak   = isActionDown(window, "sneak");
+    const bool keySprint  = isActionDown(window, "sprint");
+
     glm::vec3 forward(
         cos(glm::radians(yaw)) * cos(glm::radians(pitch)),
         sin(glm::radians(pitch)),
@@ -66,13 +76,15 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
 
     glm::vec3 moveDir(0.0f);
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) moveDir += forward;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) moveDir -= forward;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) moveDir += right;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) moveDir -= right;
+    if (keyForward) moveDir += forward;
+    if (keyBack)    moveDir -= forward;
+    if (keyRight)   moveDir += right;
+    if (keyLeft)    moveDir -= right;
 
     float speed = inWater ? 2.2f : 4.3f;
-    if (!inWater && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+    if (!inWater && keySneak) {
+        speed = 1.3f;                       // sneaking: slow walk
+    } else if (!inWater && keySprint) {
         speed = 7.0f;
     }
 
@@ -89,8 +101,10 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
         velocity.y += waterGravity * deltaTime;
         velocity.y *= 0.85f;
 
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-            velocity.y = 4.0f;
+        if (keyJump) {
+            velocity.y = 4.0f;              // swim up
+        } else if (keySneak) {
+            velocity.y = -3.0f;             // swim down
         }
     } else {
         float gravity = -22.0f;
@@ -98,7 +112,7 @@ void Player::update(float deltaTime, const World& world, GLFWwindow* window, sol
             velocity.y += gravity * deltaTime;
         }
 
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS && isGrounded) {
+        if (keyJump && isGrounded) {
             velocity.y = 8.0f;
             isGrounded = false;
         }

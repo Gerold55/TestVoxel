@@ -1,7 +1,23 @@
 #include "ParticleSystem.h"
+#include "Block.h"
 #include <glm/gtc/type_ptr.hpp>
+#include <cmath>
 #include <cstdlib>
 #include <vector>
+
+// Particles are drawn with the world's block shader, so each vertex uses the same
+// 13-float layout as chunk vertices (see Vertex in Types.h):
+//   pos(3) tint(3) uv(2) baseLayer overlayLayer tintBase tintOverlay faceShading
+namespace {
+constexpr int kFloatsPerVertex   = 13;
+constexpr int kFloatsPerParticle = kFloatsPerVertex * 6;
+constexpr size_t kMaxParticles   = 500;
+constexpr float kPieceSize       = 0.25f;   // each particle shows a quarter-width piece of the texture
+
+float rand01() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); }
+
+float fract(float v) { return v - std::floor(v); }
+}
 
 ParticleSystem::ParticleSystem() {
     initBuffers();
@@ -18,43 +34,51 @@ void ParticleSystem::initBuffers() {
 
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 54 * 1000, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * kFloatsPerParticle * kMaxParticles, nullptr, GL_DYNAMIC_DRAW);
 
-    // Position attrib (layout 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    // Color attrib (layout 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    // TexCoord attrib (layout 2)
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-    // Texture Layer attrib (layout 3)
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(8 * sizeof(float)));
-    glEnableVertexAttribArray(3);
+    const GLsizei stride = kFloatsPerVertex * sizeof(float);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);                     // position
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));   // tint colour
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));   // uv
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float)));   // base layer
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, stride, (void*)(9 * sizeof(float)));   // overlay layer (-1 = none)
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(10 * sizeof(float)));  // tint base
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, (void*)(11 * sizeof(float)));  // tint overlay
+    glVertexAttribPointer(7, 1, GL_FLOAT, GL_FALSE, stride, (void*)(12 * sizeof(float)));  // face shading
+    for (int i = 0; i < 8; ++i) glEnableVertexAttribArray(i);
 
     glBindVertexArray(0);
 }
 
 void ParticleSystem::spawnBreakParticles(const glm::vec3& pos, uint8_t blockId, float texLayer) {
+    if (texLayer < 0.0f) return;   // block has no texture
+
+    // Grass, leaves etc. are tinted - use the block's colour so particles match
+    glm::vec3 tint(1.0f);
+    if (blockId != 0) {
+        const auto& block = BlockRegistry::getInstance().getBlock(blockId);
+        for (const auto& f : block.faces) {
+            if (static_cast<float>(f.baseLayer) == texLayer && f.tintBase) {
+                tint = block.defaultTint;
+                break;
+            }
+        }
+    }
+
     for (int i = 0; i < 16; ++i) {
-        if (particles.size() >= 500) break;
+        if (particles.size() >= kMaxParticles) break;
 
         Particle p;
-        p.position = pos + glm::vec3(
-            (static_cast<float>(rand()) / RAND_MAX) * 0.8f + 0.1f,
-            (static_cast<float>(rand()) / RAND_MAX) * 0.8f + 0.1f,
-            (static_cast<float>(rand()) / RAND_MAX) * 0.8f + 0.1f
-        );
-        p.velocity = glm::vec3(
-            ((static_cast<float>(rand()) / RAND_MAX) - 0.5f) * 3.0f,
-            (static_cast<float>(rand()) / RAND_MAX) * 4.0f + 1.0f,
-            ((static_cast<float>(rand()) / RAND_MAX) - 0.5f) * 3.0f
-        );
-        p.color = glm::vec3(1.0f);
+        p.position = pos + glm::vec3(rand01() * 0.8f + 0.1f,
+                                     rand01() * 0.8f + 0.1f,
+                                     rand01() * 0.8f + 0.1f);
+        p.velocity = glm::vec3((rand01() - 0.5f) * 3.0f,
+                               rand01() * 4.0f + 1.0f,
+                               (rand01() - 0.5f) * 3.0f);
+        p.color = tint;
         p.lifetime = 0.0f;
-        p.maxLifetime = 0.4f + (static_cast<float>(rand()) / RAND_MAX) * 0.3f;
-        p.size = 0.10f;
+        p.maxLifetime = 0.4f + rand01() * 0.3f;   // also seeds which piece of the texture it shows
+        p.size = 0.12f;
         p.textureLayer = texLayer;
 
         particles.push_back(p);
@@ -81,51 +105,65 @@ void ParticleSystem::render(const glm::mat4& view, const glm::mat4& proj, GLuint
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
 
+    // Particles are already in world space. Reset the per-chunk uniforms left over
+    // from drawing the world (otherwise particles get the last chunk's offset/fade).
+    const glm::mat4 identity(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(identity));
+    glUniform1f(glGetUniformLocation(shaderProgram, "u_ChunkFade"), 1.0f);
+    glUniform1i(glGetUniformLocation(shaderProgram, "u_IsGUI"), 0);
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, textureArrayID);
     glUniform1i(glGetUniformLocation(shaderProgram, "textureArray"), 0);
 
-    std::vector<float> vertexData;
-    vertexData.reserve(particles.size() * 54);
+    // Camera axes from the view matrix (same for every particle)
+    const glm::vec3 camRight(view[0][0], view[1][0], view[2][0]);
+    const glm::vec3 camUp(view[0][1], view[1][1], view[2][1]);
 
-    float hs = 0.06f; // Half-size of particle quad
+    std::vector<float> vertexData;
+    vertexData.reserve(particles.size() * kFloatsPerParticle);
 
     for (const auto& p : particles) {
-        // Pass quad corner offsets (-hs to +hs) directly as vertex attributes or position offsets
-        // Format: worldPosX, worldPosY, worldPosZ, r, g, b, u, v, layer, offsetX, offsetY
-        // To keep the layout clean with your existing VBO structure, we can pass corner offsets 
-        // or let the vertex shader bill-board them using quad corner indices.
-        
-        // Simpler CPU-side billboarding approach: 
-        // We calculate camera right and up vectors from the view matrix.
-        glm::vec3 camRight = glm::vec3(view[0][0], view[1][0], view[2][0]);
-        glm::vec3 camUp    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+        // Shrink a little as the particle dies
+        const float life = 1.0f - 0.5f * (p.lifetime / p.maxLifetime);
+        const float hs = p.size * 0.5f * life;
 
-        glm::vec3 p0 = p.position + (-camRight - camUp) * hs;
-        glm::vec3 p1 = p.position + ( camRight - camUp) * hs;
-        glm::vec3 p2 = p.position + ( camRight + camUp) * hs;
-        glm::vec3 p3 = p.position + (-camRight + camUp) * hs;
+        const glm::vec3 c0 = p.position + (-camRight - camUp) * hs;   // bottom-left
+        const glm::vec3 c1 = p.position + ( camRight - camUp) * hs;   // bottom-right
+        const glm::vec3 c2 = p.position + ( camRight + camUp) * hs;   // top-right
+        const glm::vec3 c3 = p.position + (-camRight + camUp) * hs;   // top-left
 
-        float vertices[54] = {
-            // Triangle 1
-            p0.x, p0.y, p0.z, p.color.r, p.color.g, p.color.b, 0.0f, 0.0f, p.textureLayer,
-            p1.x, p1.y, p1.z, p.color.r, p.color.g, p.color.b, 1.0f, 0.0f, p.textureLayer,
-            p2.x, p2.y, p2.z, p.color.r, p.color.g, p.color.b, 1.0f, 1.0f, p.textureLayer,
-            // Triangle 2
-            p0.x, p0.y, p0.z, p.color.r, p.color.g, p.color.b, 0.0f, 0.0f, p.textureLayer,
-            p2.x, p2.y, p2.z, p.color.r, p.color.g, p.color.b, 1.0f, 1.0f, p.textureLayer,
-            p3.x, p3.y, p3.z, p.color.r, p.color.g, p.color.b, 0.0f, 1.0f, p.textureLayer
+        // A random quarter-sized piece of the block texture (fixed per particle).
+        // Textures are stored top row first, so v grows downwards.
+        const float u0 = fract(p.maxLifetime * 37.13f) * (1.0f - kPieceSize);
+        const float v0 = fract(p.maxLifetime * 91.71f) * (1.0f - kPieceSize);
+        const float u1 = u0 + kPieceSize;
+        const float v1 = v0 + kPieceSize;
+
+        auto vert = [&](const glm::vec3& v, float u, float vv) {
+            const float data[kFloatsPerVertex] = {
+                v.x, v.y, v.z,
+                p.color.r, p.color.g, p.color.b,
+                u, vv,
+                p.textureLayer,
+                -1.0f,          // no overlay
+                1.0f,           // apply tint (white for untinted blocks)
+                0.0f,
+                1.0f            // full brightness before sunlight
+            };
+            vertexData.insert(vertexData.end(), data, data + kFloatsPerVertex);
         };
 
-        for (int i = 0; i < 54; ++i) {
-            vertexData.push_back(vertices[i]);
-        }
+        vert(c0, u0, v1); vert(c1, u1, v1); vert(c2, u1, v0);
+        vert(c0, u0, v1); vert(c2, u1, v0); vert(c3, u0, v0);
     }
 
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, vertexData.size() * sizeof(float), vertexData.data(), GL_DYNAMIC_DRAW);
 
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

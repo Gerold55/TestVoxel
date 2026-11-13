@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -77,6 +78,22 @@ public:
     // this column. Returns -1 if the column has no loaded ground.
     int groundHeightAt(int x, int z) const;
 
+    // ---------------- Saving / loading ----------------
+
+    // Unloads every chunk and clears all queues (used when switching worlds).
+    void reset();
+
+    // Folder for this world's chunk files ("" = saving disabled).
+    void setSaveDirectory(const std::string& dir) { m_saveDir = dir; }
+    const std::string& saveDirectory() const { return m_saveDir; }
+
+    // The seed passed to Lua's set_world_seed. Changing it re-seeds Lua on the next update.
+    uint32_t seed() const { return m_seed; }
+    void setSeed(uint32_t seed) { m_seed = seed; m_luaSeeded = false; }
+
+    // Writes every chunk that changed since it was last saved. Returns chunks written.
+    int saveAll();
+
     // Kept public for compatibility with existing code.
     std::unordered_map<ChunkCoord, std::shared_ptr<ChunkMesh>, PairHash> chunks;
 
@@ -91,6 +108,7 @@ private:
     ChunkMesh* chunkAt(const glm::ivec3& loc) const;
     void markMeshDirty(int cx, int cz);
     void markBlockChanged(const glm::ivec3& loc);
+    void markModified(const glm::ivec3& loc);
     void linkChunk(int cx, int cz);
     void unlinkChunk(int cx, int cz);
 
@@ -104,6 +122,11 @@ private:
 
     void resolveFluidIds();
     void noteFluidChange(const glm::ivec3& loc);
+
+    // Chunk files: <saveDir>/chunks/c.<x>.<z>.bin
+    std::string chunkPath(int cx, int cz) const;
+    bool saveChunkToDisk(const ChunkCoord& c, const ChunkMesh& chunk) const;
+    bool loadChunkFromDisk(int cx, int cz, ChunkMesh& chunk) const;
 
     uint32_t m_seed = 0;
     bool m_luaSeeded = false;
@@ -125,4 +148,8 @@ private:
     uint8_t m_waterId = 0;
     uint8_t m_flowingWaterId = 0;
     std::unordered_set<glm::ivec3, IVec3Hash> m_activeFluids;
+
+    // Saving
+    std::string m_saveDir;
+    std::unordered_set<ChunkCoord, PairHash> m_modified;   // changed since last save
 };

@@ -1,0 +1,5 @@
+# Game settings. Edited from the Settings screen.
+fov = 70
+key_forward = 87
+render_distance = 10
+vsync = 1

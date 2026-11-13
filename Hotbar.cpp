@@ -244,7 +244,7 @@ float clampInside(float x, float w, float W) {
 
 struct BarLayout {
     bool textured = false;
-    float s = 1.0f;                   // atlas pixel -> screen pixel scale (textured mode)
+    float s = 1.0f;                 // atlas pixel -> screen pixel scale (textured mode)
     float x = 0.0f, y = 0.0f;       // top-left of the bar
     float w = 0.0f, h = 0.0f;       // size of the bar
     float pitch = 0.0f;             // distance between slot origins
@@ -299,6 +299,7 @@ glm::vec2 slotCenter(const BarLayout& b, int i) {
 // 3D item icons (voxel shader). Vertex layout: 13 floats.
 // ---------------------------------------------------------------------------
 
+// Face order: -Z, +Z, +Y, -Y, -X, +X
 const float kFaceVerts[6][18] = {
     { 0.5f,-0.5f,-0.5f, -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f },
     {-0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,   0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f,-0.5f, 0.5f },
@@ -313,7 +314,12 @@ const float kTexCoords[12] = {
     1.0f, 1.0f,  0.0f, 1.0f,  0.0f, 0.0f
 };
 
-const float kFaceShading[6] = { 0.7f, 0.7f, 1.0f, 0.5f, 0.8f, 0.8f };
+// Indexed by kFaceVerts order: -Z, +Z, +Y, -Y, -X, +X
+// Visible faces after rotation: +Y (top), +Z (left), +X (right) - same as the creative inventory
+const float kFaceShading[6] = { 0.6f, 0.8f, 1.0f, 0.5f, 0.8f, 0.6f };
+
+// Maps kFaceVerts order -> BlockProperty::faces order (0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z)
+const int kFaceToProp[6] = { 5, 4, 2, 3, 1, 0 };
 
 void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, float box) {
     if (blockId == 0) return;
@@ -322,6 +328,28 @@ void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, fl
 
     const float scale = box * kIconScale + kIconGrowPx;
     const glm::vec3 tint = prop.defaultTint;
+
+    // inventory_image: flat picture, drawn as-is (no tint, no overlay)
+    if (prop.inventoryLayer >= 0) {
+        const float h = scale * 0.6f;
+        const float x0 = cx - h, x1 = cx + h, y0 = cy - h, y1 = cy + h;
+        const float z = -5.0f;
+        const float layer = static_cast<float>(prop.inventoryLayer);
+
+        auto pv = [&](float x, float y, float u, float v) {
+            const float vtx[13] = { x, y, z, 1.0f, 1.0f, 1.0f, u, v,
+                                    layer, -1.0f, 0.0f, 0.0f, 1.0f };
+            out.insert(out.end(), vtx, vtx + 13);
+        };
+
+        pv(x0, y1, 0.0f, 1.0f);
+        pv(x1, y1, 1.0f, 1.0f);
+        pv(x1, y0, 1.0f, 0.0f);
+        pv(x0, y1, 0.0f, 1.0f);
+        pv(x1, y0, 1.0f, 0.0f);
+        pv(x0, y0, 0.0f, 0.0f);
+        return;
+    }
 
     if (prop.pattern == "plantlike") {
         const float h = scale * 0.5f;
@@ -354,16 +382,15 @@ void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, fl
         return;
     }
 
+    // Rotate -45 degrees around Y (so +Z faces left, +X faces right), then tilt the top toward the viewer.
     glm::mat4 xf = glm::rotate(glm::mat4(1.0f), glm::radians(35.264f), glm::vec3(1, 0, 0));
-    xf = glm::rotate(xf, glm::radians(45.0f), glm::vec3(0, 1, 0));
+    xf = glm::rotate(xf, glm::radians(-45.0f), glm::vec3(0, 1, 0));
     xf = glm::scale(xf, glm::vec3(scale));
 
     for (int face = 0; face < 6; ++face) {
-        int idx = face;
-        if (face == 2 && prop.faces[3].baseLayer >= 0) idx = 3;
-        else if (face == 3 && prop.faces[2].baseLayer >= 0) idx = 2;
+        const FaceDefinition& fd = prop.faces[kFaceToProp[face]];
+        if (fd.baseLayer < 0) continue;
 
-        const FaceDefinition& fd = prop.faces[idx];
         const float layer = static_cast<float>(fd.baseLayer);
         const float overlay = fd.overlayLayer >= 0 ? static_cast<float>(fd.overlayLayer) : -1.0f;
 
@@ -371,16 +398,18 @@ void appendIcon(std::vector<float>& out, uint8_t blockId, float cx, float cy, fl
             const glm::vec4 p = xf * glm::vec4(kFaceVerts[face][v * 3 + 0],
                                                kFaceVerts[face][v * 3 + 1],
                                                kFaceVerts[face][v * 3 + 2], 1.0f);
+            // Screen Y points down, so flip Y to keep the cube's top on top.
             out.push_back(cx + p.x);
-            out.push_back(cy + p.y);
-            out.push_back(-5.0f + p.z * 0.01f);
+            out.push_back(cy - p.y);
+            out.push_back(-5.0f + p.z * 0.01f);   // nearer faces win the depth test
 
             out.push_back(tint.r);
             out.push_back(tint.g);
             out.push_back(tint.b);
 
+            // Flip V so side textures are the right way up
             out.push_back(kTexCoords[v * 2 + 0]);
-            out.push_back(kTexCoords[v * 2 + 1]);
+            out.push_back(1.0f - kTexCoords[v * 2 + 1]);
 
             out.push_back(layer);
             out.push_back(overlay);
@@ -447,31 +476,8 @@ void Hotbar::toggleCreativeInventory() {
     std::cout << "[Creative Inventory] " << (isCreativeOpen ? "Opened" : "Closed") << std::endl;
 }
 
-static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
-    if (prop.name.empty() || prop.name == "air" || prop.name == "unknown") return false;
-    if (!prop.in_creative) return false;
-
-    bool isNature = (prop.pattern == "plantlike" || 
-                     prop.name.find("leaves") != std::string::npos ||
-                     prop.name.find("water") != std::string::npos ||
-                     prop.name.find("sand") != std::string::npos ||
-                     prop.name.find("reed") != std::string::npos);
-
-    bool isBuilding = !isNature && (prop.name.find("stone") != std::string::npos ||
-                                  prop.name.find("dirt") != std::string::npos ||
-                                  prop.name.find("log") != std::string::npos ||
-                                  prop.name.find("gravel") != std::string::npos ||
-                                  prop.name.find("bedrock") != std::string::npos);
-
-    if (tab == 0) return true;
-    if (tab == 1) return isNature;
-    if (tab == 2) return isBuilding;
-    
-    return false;
-}
-
 void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight) {
-    // Creative inventory click handling is now fully delegated to Lua via main.cpp bindings
+    // Creative inventory clicks are handled by inventory.lua (via InventorySystem)
 }
 
 void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
@@ -486,7 +492,6 @@ void Hotbar::updateBuffers(int screenWidth, int screenHeight) {
         appendIcon(iconVerts, slots[i].blockId, c.x, c.y, bar.box);
     }
 
-    // Creative item icon generation is handled by Lua UI rendering
     iconVertexCount = static_cast<unsigned int>(iconVerts.size() / 13);
 
     if (iconVAO == 0) glGenVertexArrays(1, &iconVAO);
@@ -574,9 +579,6 @@ void Hotbar::renderSlots(GLuint /*uiShader*/, GLuint /*texturedUIShader*/) {
         drawUi(v, selectedTextureID, true, W, H);
     }
 
-    // NOTE: Creative panel rendering has been completely removed here 
-    // so that Lua's `creative_inventory.lua` handles the window layout and tabs exclusively.
-
     if (cullWasOn) glEnable(GL_CULL_FACE);
     if (depthWasOn) glEnable(GL_DEPTH_TEST);
 }
@@ -592,7 +594,12 @@ void Hotbar::render3DIcons(GLuint voxelShader, GLuint textureArrayID) {
     const glm::mat4 orthoProj = glm::ortho(0.0f, width, height, 0.0f, -100.0f, 100.0f);
     const glm::mat4 identity(1.0f);
 
+    // Don't rely on whatever state the previous UI left behind
     glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);        // glClear won't clear depth if writes are disabled
+    glDepthFunc(GL_LESS);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);  // glClear is clipped by the scissor box too
     glClear(GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(voxelShader);
@@ -615,7 +622,6 @@ void Hotbar::render3DIcons(GLuint voxelShader, GLuint textureArrayID) {
     glDrawArrays(GL_TRIANGLES, 0, iconVertexCount);
     glBindVertexArray(0);
 
-    if (isGuiLoc != -1) {
-        glUniform1i(isGuiLoc, 0);
-    }
+    if (isGuiLoc != -1) glUniform1i(isGuiLoc, 0);
+    if (unlitLoc != -1) glUniform1i(unlitLoc, 0);
 }

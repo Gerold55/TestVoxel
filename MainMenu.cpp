@@ -40,8 +40,9 @@ MainMenu::MainMenu() {
     centerButtons.push_back({ "credits",      "Credits",      -0.30f, -0.22f, 0.60f, 0.08f });
     centerButtons.push_back({ "quit",         "Exit Game",    -0.30f, -0.32f, 0.60f, 0.08f });
 
-    // Top-right header button
-    topRightButtons.push_back({ "mods", "Mods", 0.75f, 0.86f, 0.20f, 0.08f });
+    // Top-right header buttons
+    topRightButtons.push_back({ "texturepacks", "Textures", 0.53f, 0.86f, 0.20f, 0.08f });
+    topRightButtons.push_back({ "mods",         "Mods",     0.75f, 0.86f, 0.20f, 0.08f });
 }
 
 MainMenu::~MainMenu() {
@@ -117,6 +118,15 @@ void MainMenu::scanSubgames() {
 
     if (availableGames.empty()) {
         availableGames.push_back({ "craft_and_ruin", "Craft & Ruin", "Developer", "Default Game", 0, 0 });
+    }
+
+    // Highlight the game that is actually loaded, not just the first folder found
+    selectedGameIndex = 0;
+    for (size_t i = 0; i < availableGames.size(); ++i) {
+        if (availableGames[i].folderName == g_ActiveGameFolder) {
+            selectedGameIndex = static_cast<int>(i);
+            break;
+        }
     }
 }
 
@@ -251,6 +261,7 @@ std::string MainMenu::handleMouseClick(double mouseX, double mouseY, int screenW
     for (auto& btn : topRightButtons) {
         if (ndcX >= btn.x && ndcX <= (btn.x + btn.w) && ndcY >= btn.y && ndcY <= (btn.y + btn.h)) {
             if (btn.id == "mods") return "mods";
+            if (btn.id == "texturepacks") return "texturepacks";
         }
     }
 

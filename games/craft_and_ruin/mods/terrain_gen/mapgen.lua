@@ -1,4 +1,6 @@
 -- mapgen.lua - Minecraft-Style Biomes with Smooth Blending, Swamps & Coastal Cattails
+-- Caves are carved by the engine afterwards (CaveGenerator.cpp), using the same world seed.
+-- Turn them off with world.set_caves_enabled(false) if you want to make your own here.
 
 local world_seed = 1337
 local CHUNK_W = 16
@@ -145,19 +147,6 @@ local function is_world_water(world_x, world_z)
     return height < 62.0
 end
 
-function is_cave(world_x, world_y, world_z)
-    local scale_a = 0.035
-    local scale_b = 0.07
-    local ox = world_x + (world_seed % 1000)
-    local oz = world_z + (world_seed % 1000)
-
-    local n1 = math.sin(ox * scale_a) * math.cos(world_y * scale_a) * math.sin(oz * scale_a)
-    local n2 = math.cos(ox * scale_b + 1.2) * math.sin(world_y * scale_b + 0.8) * math.cos(oz * scale_b + 2.1)
-
-    local combined = (n1 + n2) * 0.5
-    return (combined > 0.38 or combined < -0.38)
-end
-
 -- ---------------------------------------------------------------------------
 -- Trees (Minecraft-Style Layered Canopies)
 -- ---------------------------------------------------------------------------
@@ -233,7 +222,7 @@ local function build_tree(chunk, lx, ly, lz, wx, wz, spec)
         for dx = -current_radius, current_radius do
             for dz = -current_radius, current_radius do
                 local is_corner = (math.abs(dx) == current_radius and math.abs(dz) == current_radius)
-                
+
                 if not (is_corner and layer == 0 and spec.radius <= 2) then
                     local target_x = lx + dx
                     local target_z = lz + dz
@@ -477,11 +466,8 @@ function generate_chunk(chunk, chunk_x, chunk_z)
                 elseif ly > surface_y - 4 then
                     chunk:set_block(lx, ly, lz, sub_block)
                 else
-                    if ly > 4 and ly < surface_y - 6 and is_cave(world_x, ly, world_z) then
-                        -- Air for cave
-                    else
-                        chunk:set_block(lx, ly, lz, stone_id)
-                    end
+                    -- Solid stone. Caves are carved afterwards by the engine (CaveGenerator).
+                    chunk:set_block(lx, ly, lz, stone_id)
                 end
             end
 
