@@ -447,6 +447,29 @@ void Hotbar::toggleCreativeInventory() {
     std::cout << "[Creative Inventory] " << (isCreativeOpen ? "Opened" : "Closed") << std::endl;
 }
 
+static bool matchesCreativeTab(const BlockProperty& prop, int tab) {
+    if (prop.name.empty() || prop.name == "air" || prop.name == "unknown") return false;
+    if (!prop.in_creative) return false;
+
+    bool isNature = (prop.pattern == "plantlike" || 
+                     prop.name.find("leaves") != std::string::npos ||
+                     prop.name.find("water") != std::string::npos ||
+                     prop.name.find("sand") != std::string::npos ||
+                     prop.name.find("reed") != std::string::npos);
+
+    bool isBuilding = !isNature && (prop.name.find("stone") != std::string::npos ||
+                                  prop.name.find("dirt") != std::string::npos ||
+                                  prop.name.find("log") != std::string::npos ||
+                                  prop.name.find("gravel") != std::string::npos ||
+                                  prop.name.find("bedrock") != std::string::npos);
+
+    if (tab == 0) return true;
+    if (tab == 1) return isNature;
+    if (tab == 2) return isBuilding;
+    
+    return false;
+}
+
 void Hotbar::handleMouseClick(double mouseX, double mouseY, int screenWidth, int screenHeight) {
     // Creative inventory click handling is now fully delegated to Lua via main.cpp bindings
 }
@@ -592,6 +615,7 @@ void Hotbar::render3DIcons(GLuint voxelShader, GLuint textureArrayID) {
     glDrawArrays(GL_TRIANGLES, 0, iconVertexCount);
     glBindVertexArray(0);
 
-    if (isGuiLoc != -1) glUniform1i(isGuiLoc, 0);
-    if (unlitLoc != -1) glUniform1i(unlitLoc, 0);
+    if (isGuiLoc != -1) {
+        glUniform1i(isGuiLoc, 0);
+    }
 }
