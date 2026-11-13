@@ -1963,10 +1963,13 @@ int main() {
                                     if (targetProp.name == "short_grass" || targetProp.name == "flower_red" || targetProp.pattern == "plantlike" || targetProp.name.find("farmland") != std::string::npos) {
                                         replaceTarget = true;
                                     }
-                                    glm::vec3 placePos = replaceTarget ? (rayResult.blockPos + glm::ivec3(0, (targetProp.name.find("farmland") != std::string::npos ? 1 : 0), 0)) : (glm::vec3(rayResult.blockPos) + glm::vec3(rayResult.faceNormal));
-                                    const glm::ivec3 cell(static_cast<int>(std::floor(placePos.x + 0.5f)),
-                                                          static_cast<int>(std::floor(placePos.y + 0.5f)),
-                                                          static_cast<int>(std::floor(placePos.z + 0.5f)));
+                                    // Work in whole-block (integer) coordinates for both cases so the
+                                    // ternary isn't mixing glm::ivec3 and glm::vec3.
+                                    const glm::ivec3 hitCell(rayResult.blockPos);
+                                    const int farmlandLift = (targetProp.name.find("farmland") != std::string::npos) ? 1 : 0;
+                                    const glm::ivec3 cell = replaceTarget
+                                        ? hitCell + glm::ivec3(0, farmlandLift, 0)
+                                        : hitCell + glm::ivec3(glm::round(glm::vec3(rayResult.faceNormal)));
 
                                     // Don't place a solid block where the player is standing (or jumping).
                                     // Player box: 0.6 wide, 1.8 tall, feet at player.position.
