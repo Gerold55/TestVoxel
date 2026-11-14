@@ -59,6 +59,12 @@ struct BlockProperty {
     bool in_creative = true; // Controls whether the block appears in the creative inventory menu
     std::string pattern = "cube"; // Controls rendering style (e.g. "cube", "plantlike", "door", "custom_model")
 
+    // --- Inventory image (like Luanti's inventory_image) ---
+    // If set, the creative inventory and hotbar show this flat image instead of the
+    // block's 3D cube / face texture. Used for tools and items (stick, hoe, scythe...).
+    std::string inventoryImage = "";
+    int inventoryLayer = -1;      // texture array layer of inventoryImage (-1 = none)
+
     // --- Custom 3D Model Support (.b3d files) ---
     std::string modelPath = "";
     std::shared_ptr<AnimatedModel> cachedModel = nullptr;

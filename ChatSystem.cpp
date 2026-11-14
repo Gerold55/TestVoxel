@@ -337,8 +337,11 @@ void ChatSystem::sendCurrentInput(GLFWwindow* window) {
 
         if (text[0] == '/') {
             executeCommand(text.substr(1));
+        } else if (m_messageSender && m_messageSender(text)) {
+            // Online: the server sends it to everyone (including us), so nothing to add here
         } else {
-            addMessage("<Player> " + text, kPlayerColor);
+            const std::string name = m_playerName.empty() ? std::string("Player") : m_playerName;
+            addMessage("<" + name + "> " + text, kPlayerColor);
         }
     }
 
@@ -440,8 +443,6 @@ void ChatSystem::renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader
 
     const float boxLeft  = W * 0.05f;
     const float boxWidth = W * 0.90f;
-
-    const float kPaddingY = 5.0f; // Extra vertical space top & bottom
 
     // The chat's bottom edge sits just above the hotbar.
     const float chatBottom = H - kHotbarReserve;

@@ -1,43 +1,37 @@
 #pragma once
+// Client-side drawable mesh for one chunk, built from its ChunkData.
+// Holds no block data itself - the world (ChunkData) is the single source of truth.
 
 #include <glad/glad.h>
-#include <glm/glm.hpp>
 #include <vector>
-#include <cstdint>
 #include "Types.h"
+
+class ChunkData;
 
 class ChunkMesh {
 public:
-    uint8_t blocks[CHUNK_WIDTH][CHUNK_HEIGHT][CHUNK_WIDTH];
-    uint8_t metadata[CHUNK_WIDTH][CHUNK_HEIGHT][CHUNK_WIDTH];
-    ChunkMesh* neighbors[6]; // +X, -X, +Y, -Y, +Z, -Z
-
-    // --- Opaque Buffers ---
-    GLuint opaqueVAO, opaqueVBO;
-    GLsizei opaqueVertexCount;
-    std::vector<Vertex> cpuOpaqueVertices;
-
-    // --- Transparent Buffers (Water, Leaves, Plants) ---
-    GLuint transparentVAO, transparentVBO;
-    GLsizei transparentVertexCount;
-    std::vector<Vertex> cpuTransparentVertices;
-
-    bool isDirty;
-    bool meshReadyForUpload;
-
-    ChunkMesh();
+    ChunkMesh() = default;
     ~ChunkMesh();
+    ChunkMesh(const ChunkMesh&) = delete;
+    ChunkMesh& operator=(const ChunkMesh&) = delete;
 
-    void setBlock(int x, int y, int z, uint8_t blockId);
-    uint8_t getLocalBlock(int x, int y, int z) const;
-    uint8_t getBlock(int x, int y, int z) const;
-
-    void setBlockWithMeta(int x, int y, int z, uint8_t blockId, uint8_t meta);
-    void setMetadata(int x, int y, int z, uint8_t meta);
-    uint8_t getMetadata(int x, int y, int z) const;
-
-    void generateMeshData();
+    // Builds vertex lists on the CPU (needs the chunk's neighbours linked for border faces).
+    void generateMeshData(const ChunkData& data);
+    // Sends the last built vertex lists to the GPU. Needs the GL context.
     void uploadMesh();
+
     void drawOpaque() const;
     void drawTransparent() const;
+
+    GLuint opaqueVAO = 0, opaqueVBO = 0;
+    GLsizei opaqueVertexCount = 0;
+    GLuint transparentVAO = 0, transparentVBO = 0;
+    GLsizei transparentVertexCount = 0;
+
+    bool meshReadyForUpload = false;   // built on the CPU, not yet on the GPU
+    bool everUploaded = false;         // has reached the GPU at least once
+
+private:
+    std::vector<Vertex> cpuOpaqueVertices;
+    std::vector<Vertex> cpuTransparentVertices;
 };

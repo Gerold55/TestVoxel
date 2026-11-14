@@ -1,51 +1,56 @@
 #pragma once
+// Chat window: message log, text input with history, "/" commands with suggestions.
+// In multiplayer, typed messages are handed to the message sender (see main.cpp),
+// which sends them to the server; otherwise they're shown locally.
 
-#include <string>
-#include <deque>
-#include <vector>
-#include <functional>
-#include <utility>
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <cstddef>
+#include <deque>
+#include <functional>
+#include <string>
+#include <utility>
+#include <vector>
 
 struct GLFWwindow;
 class FontRenderer;
 
 class ChatSystem {
 public:
-    // Returns true if the command was handled (for example, by a Lua mod).
-    using CommandHandler = std::function<bool(const std::string& command)>;
-
-    struct CommandInfo {
-        std::string name;         // without the slash, lowercase
-        std::string usage;        // e.g. "<day|night>", may be empty
-        std::string description;  // shown in suggestions and /help
-    };
-
     ChatSystem();
     ~ChatSystem();
-    ChatSystem(const ChatSystem&) = delete;
-    ChatSystem& operator=(const ChatSystem&) = delete;
 
-    bool isOpen = false;
-    std::string currentInput;
-    size_t maxHistorySize = 100;
-
+    // ---- Opening / input (called from the GLFW callbacks in main.cpp) ----
     void openChat(GLFWwindow* window, int triggerKey);
+    void closeChat(GLFWwindow* window);
     void toggleChat(GLFWwindow* window);
-
-    void addMessage(const std::string& message);
-    void addMessage(const std::string& message, const glm::vec3& color);
-
-    void setCommandHandler(CommandHandler handler) { m_commandHandler = std::move(handler); }
-
-    // Adds a command to the suggestion list and /help. Registering an existing name replaces it.
-    void registerCommand(const std::string& name, const std::string& usage, const std::string& description);
-
     void handleCharInput(unsigned int codepoint);
     void handleKeyInput(int key, int scancode, int action, int mods, GLFWwindow* window);
 
+    // ---- Messages ----
+    void addMessage(const std::string& message);                          // system colour
+    void addMessage(const std::string& message, const glm::vec3& color);
+
+    // ---- Commands ----
+    // Shown in /help and the suggestion list.
+    void registerCommand(const std::string& name, const std::string& usage, const std::string& description);
+    // Gets every "/command" first (without the slash). Return true if it was handled.
+    void setCommandHandler(std::function<bool(const std::string&)> handler) { m_commandHandler = std::move(handler); }
+
+    // ---- Multiplayer ----
+    // Name shown before your own messages ("<Name> hello").
+    void setPlayerName(const std::string& name) { m_playerName = name; }
+    const std::string& playerName() const { return m_playerName; }
+    // Called with every typed (non-command) message. Return true if it was sent online
+    // (the server echoes it back to everyone), false to show it locally instead.
+    void setMessageSender(std::function<bool(const std::string&)> sender) { m_messageSender = std::move(sender); }
+
     void renderChatOverlay(FontRenderer* fontRenderer, GLuint fontShader, int screenWidth, int screenHeight);
+
+    bool isOpen = false;
+    bool suppressNextChar = false;   // skip the 'T' that opened the chat
+    std::string currentInput;
+    size_t maxHistorySize = 100;     // lines kept in the log
 
 private:
     struct ChatLine {
@@ -53,31 +58,34 @@ private:
         glm::vec3 color;
         double timeAdded;
     };
+    struct CommandInfo {
+        std::string name;
+        std::string usage;
+        std::string description;
+    };
 
-    void closeChat(GLFWwindow* window);
-    void sendCurrentInput(GLFWwindow* window);
-    void executeCommand(const std::string& cmd);
-    void showHelp(const std::string& topic);
-    void recallHistory(int direction);
+    std::vector<const CommandInfo*> matchingCommands() const;
+    void acceptSuggestion();
+    void pushLine(const std::string& text, const glm::vec3& color);
     void insertText(const std::string& text);
     void deleteBack();
     void deleteForward();
-    void pushLine(const std::string& text, const glm::vec3& color);
-
-    // Commands whose names start with what's typed after the slash.
-    std::vector<const CommandInfo*> matchingCommands() const;
-    void acceptSuggestion();
-
+    void recallHistory(int direction);
+    void sendCurrentInput(GLFWwindow* window);
+    void executeCommand(const std::string& cmd);
+    void showHelp(const std::string& topic);
     void ensureRectGpu();
 
     std::deque<ChatLine> m_lines;
     std::deque<std::string> m_sentHistory;
     std::vector<CommandInfo> m_commands;
-    int m_historyIndex = -1;
-    int m_suggestSel = 0;               // highlighted suggestion row
+    std::function<bool(const std::string&)> m_commandHandler;
+    std::function<bool(const std::string&)> m_messageSender;
+    std::string m_playerName = "Player";
+
     size_t m_cursor = 0;
-    bool suppressNextChar = false;
-    CommandHandler m_commandHandler;
+    int m_historyIndex = -1;
+    int m_suggestSel = 0;
 
     bool m_gpuReady = false;
     GLuint m_rectProgram = 0;

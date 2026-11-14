@@ -1,0 +1,7 @@
+# Game settings. Edited from the Settings screen.
+fov = 70
+key_forward = 87
+player_name = TestVoxel
+render_distance = 10
+server_max_players = 20
+vsync = 1

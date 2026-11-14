@@ -1,0 +1,2 @@
+# Saved servers (name|address). Edited from the Multiplayer screen.
+My Server|10.0.0.223

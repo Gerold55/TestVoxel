@@ -1,8 +1,8 @@
 #include "ChunkMesh.h"
+#include "ChunkData.h"
 #include "Block.h"
 #include "Types.h"
 #include <cstddef>
-#include <cstring>
 #include <vector>
 
 namespace {
@@ -102,9 +102,9 @@ void setupVertexAttributes() {
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, texCoordX));     glEnableVertexAttribArray(2);
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, baseLayer));     glEnableVertexAttribArray(3);
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, overlayLayer));  glEnableVertexAttribArray(4);
-    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, tintBase));     glEnableVertexAttribArray(5);
-    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, tintOverlay));  glEnableVertexAttribArray(6);
-    glVertexAttribPointer(7, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, faceShading));  glEnableVertexAttribArray(7);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, tintBase));      glEnableVertexAttribArray(5);
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, tintOverlay));   glEnableVertexAttribArray(6);
+    glVertexAttribPointer(7, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, faceShading));   glEnableVertexAttribArray(7);
 }
 
 void uploadBuffer(GLuint& vao, GLuint& vbo, const std::vector<Vertex>& verts) {
@@ -141,7 +141,7 @@ inline bool isOpaqueSolid(const BlockProperty& p) {
     return !p.isTransparent && !isPlantLike(p) && !isCutout(p);
 }
 
-// Robust face culling rules preventing clipping artifacts between water and waterlogged foliage
+// Face culling rules preventing clipping artifacts between water and waterlogged foliage
 bool isFaceHidden(const BlockProperty& self, uint8_t selfId, bool renderingWater,
                   const BlockProperty& nb, uint8_t nbId, bool nbWaterlogged) {
     if (isPlantLike(nb) && !nbWaterlogged) return false; // dry plants do not occlude
@@ -160,68 +160,14 @@ bool isFaceHidden(const BlockProperty& self, uint8_t selfId, bool renderingWater
 
 } // namespace
 
-ChunkMesh::ChunkMesh() : opaqueVAO(0), opaqueVBO(0), opaqueVertexCount(0),
-                         transparentVAO(0), transparentVBO(0), transparentVertexCount(0),
-                         isDirty(true), meshReadyForUpload(false) {
-    std::memset(blocks, 0, sizeof(blocks));
-    std::memset(metadata, 0, sizeof(metadata));
-    for (int i = 0; i < 6; ++i) neighbors[i] = nullptr;
-}
-
 ChunkMesh::~ChunkMesh() {
-    if (opaqueVAO != 0)       glDeleteVertexArrays(1, &opaqueVAO);
-    if (opaqueVBO != 0)       glDeleteBuffers(1, &opaqueVBO);
+    if (opaqueVAO != 0)      glDeleteVertexArrays(1, &opaqueVAO);
+    if (opaqueVBO != 0)      glDeleteBuffers(1, &opaqueVBO);
     if (transparentVAO != 0) glDeleteVertexArrays(1, &transparentVAO);
     if (transparentVBO != 0) glDeleteBuffers(1, &transparentVBO);
 }
 
-void ChunkMesh::setBlock(int x, int y, int z, uint8_t blockId) {
-    if (x >= 0 && x < CHUNK_WIDTH && y >= 0 && y < CHUNK_HEIGHT && z >= 0 && z < CHUNK_WIDTH) {
-        blocks[x][y][z] = blockId;
-        isDirty = true;
-    }
-}
-
-uint8_t ChunkMesh::getLocalBlock(int x, int y, int z) const {
-    if (x >= 0 && x < CHUNK_WIDTH && y >= 0 && y < CHUNK_HEIGHT && z >= 0 && z < CHUNK_WIDTH) {
-        return blocks[x][y][z];
-    }
-    return 0;
-}
-
-uint8_t ChunkMesh::getBlock(int x, int y, int z) const {
-    if (y < 0 || y >= CHUNK_HEIGHT) return 0;
-
-    if (x < 0)            return neighbors[1] ? neighbors[1]->getLocalBlock(x + CHUNK_WIDTH, y, z) : 0;
-    if (x >= CHUNK_WIDTH) return neighbors[0] ? neighbors[0]->getLocalBlock(x - CHUNK_WIDTH, y, z) : 0;
-    if (z < 0)            return neighbors[5] ? neighbors[5]->getLocalBlock(x, y, z + CHUNK_WIDTH) : 0;
-    if (z >= CHUNK_WIDTH) return neighbors[4] ? neighbors[4]->getLocalBlock(x, y, z - CHUNK_WIDTH) : 0;
-
-    return blocks[x][y][z];
-}
-
-void ChunkMesh::setBlockWithMeta(int x, int y, int z, uint8_t blockId, uint8_t meta) {
-    if (x >= 0 && x < CHUNK_WIDTH && y >= 0 && y < CHUNK_HEIGHT && z >= 0 && z < CHUNK_WIDTH) {
-        blocks[x][y][z] = blockId;
-        metadata[x][y][z] = meta;
-        isDirty = true;
-    }
-}
-
-void ChunkMesh::setMetadata(int x, int y, int z, uint8_t meta) {
-    if (x >= 0 && x < CHUNK_WIDTH && y >= 0 && y < CHUNK_HEIGHT && z >= 0 && z < CHUNK_WIDTH) {
-        metadata[x][y][z] = meta;
-    }
-}
-
-uint8_t ChunkMesh::getMetadata(int x, int y, int z) const {
-    if (x >= 0 && x < CHUNK_WIDTH && y >= 0 && y < CHUNK_HEIGHT && z >= 0 && z < CHUNK_WIDTH) {
-        return metadata[x][y][z];
-    }
-    return 0;
-}
-
-void ChunkMesh::generateMeshData() {
+void ChunkMesh::generateMeshData(const ChunkData& data) {
     cpuOpaqueVertices.clear();
     cpuTransparentVertices.clear();
 
@@ -275,7 +221,7 @@ void ChunkMesh::generateMeshData() {
         if (renderingWater) {
             topY = fy + kWaterSurfaceY;
             if (isWaterProp(selfProp)) {
-                const uint8_t meta = getMetadata(x, y, z);
+                const uint8_t meta = data.getLocalMetadata(x, y, z);
                 const int waterLevel = meta & 0x07;
                 if (waterLevel > 0 && waterLevel < 8) {
                     topY = fy + (8 - waterLevel) / 8.0f;
@@ -288,10 +234,10 @@ void ChunkMesh::generateMeshData() {
             const int ny = y + kFaceOffset[f][1];
             const int nz = z + kFaceOffset[f][2];
 
-            const uint8_t neighborId = getBlock(nx, ny, nz);
+            const uint8_t neighborId = data.getBlock(nx, ny, nz);
             if (neighborId != 0) {
                 const auto& nProp = registry.getBlock(neighborId);
-                const uint8_t neighborMeta = getMetadata(nx, ny, nz);
+                const uint8_t neighborMeta = data.getMetadata(nx, ny, nz);   // looks across chunk borders
                 const bool nWaterlogged = canWaterlog(nProp) && ((neighborMeta & 1) != 0);
 
                 if (isFaceHidden(selfProp, blockId, renderingWater, nProp, neighborId, nWaterlogged)) {
@@ -328,11 +274,11 @@ void ChunkMesh::generateMeshData() {
     for (int x = 0; x < CHUNK_WIDTH; ++x) {
         for (int y = 0; y < CHUNK_HEIGHT; ++y) {
             for (int z = 0; z < CHUNK_WIDTH; ++z) {
-                const uint8_t blockId = blocks[x][y][z];
+                const uint8_t blockId = data.getLocalBlock(x, y, z);
                 if (blockId == 0) continue;
 
                 const auto& prop = registry.getBlock(blockId);
-                const bool waterlogged = canWaterlog(prop) && ((metadata[x][y][z] & 1) != 0);
+                const bool waterlogged = canWaterlog(prop) && ((data.getLocalMetadata(x, y, z) & 1) != 0);
 
                 if (isPlantLike(prop)) {
                     emitPlant(x, y, z, prop);
@@ -347,23 +293,26 @@ void ChunkMesh::generateMeshData() {
     }
 
     meshReadyForUpload = true;
-    isDirty = true;
 }
 
 void ChunkMesh::uploadMesh() {
     if (!meshReadyForUpload) return;
 
-    opaqueVertexCount       = static_cast<GLsizei>(cpuOpaqueVertices.size());
+    opaqueVertexCount      = static_cast<GLsizei>(cpuOpaqueVertices.size());
     transparentVertexCount = static_cast<GLsizei>(cpuTransparentVertices.size());
 
-    uploadBuffer(opaqueVAO,       opaqueVBO,       cpuOpaqueVertices);
+    uploadBuffer(opaqueVAO,      opaqueVBO,      cpuOpaqueVertices);
     uploadBuffer(transparentVAO, transparentVBO, cpuTransparentVertices);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 
+    // The GPU has its own copy now; free the CPU-side vertices
+    std::vector<Vertex>().swap(cpuOpaqueVertices);
+    std::vector<Vertex>().swap(cpuTransparentVertices);
+
     meshReadyForUpload = false;
-    isDirty = false;
+    everUploaded = true;
 }
 
 void ChunkMesh::drawOpaque() const {
