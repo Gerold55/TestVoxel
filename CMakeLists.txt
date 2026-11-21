@@ -224,6 +224,13 @@ else()
     target_link_libraries(BlockSmith PRIVATE ${LUA_LIBRARY})
 endif()
 
+if (NOT WIN32)
+    find_library(EXECINFO_LIBRARY execinfo)
+    if (EXECINFO_LIBRARY)
+        target_link_libraries(BlockSmith PRIVATE ${EXECINFO_LIBRARY})
+    endif()
+endif()
+
 endif()   # NOT BLOCKSMITH_SERVER_ONLY (the game)
 
 # ---------------------------------------------------------------------------
@@ -336,6 +343,11 @@ endif()
 if (NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(BlockSmithServer PRIVATE Threads::Threads)
+
+    find_library(EXECINFO_LIBRARY execinfo)
+    if (EXECINFO_LIBRARY)
+        target_link_libraries(BlockSmithServer PRIVATE ${EXECINFO_LIBRARY})
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
